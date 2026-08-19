@@ -1,7 +1,12 @@
 package main
 
 import (
+	"bytes"
+	"context"
 	"fmt"
+	"os"
+	"os/exec"
+	"strconv"
 	"strings"
 )
 
@@ -75,4 +80,31 @@ func scopeQuery(q, account string) (string, error) {
 		return fmt.Sprintf("path:%s/**", account), nil
 	}
 	return fmt.Sprintf("(%s) and path:%s/**", q, account), nil
+}
+
+// Notmuch runs the notmuch binary. The design calls for executing it rather
+// than binding the C library: the build stays static and the binary is not
+// coupled to the installed notmuch version.
+type Notmuch struct{ config string }
+
+func newNotmuch(configPath string) *Notmuch { return &Notmuch{config: configPath} }
+
+func (n *Notmuch) run(ctx context.Context, args ...string) ([]byte, error) {
+	cmd := exec.CommandContext(ctx, "notmuch", args...)
+	cmd.Env = append(os.Environ(), "NOTMUCH_CONFIG="+n.config)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		return nil, fmt.Errorf("notmuch %s: %w: %s", args[0], err, strings.TrimSpace(stderr.String()))
+	}
+	return stdout.Bytes(), nil
+}
+
+func (n *Notmuch) count(ctx context.Context, query string) (int, error) {
+	out, err := n.run(ctx, "count", query)
+	if err != nil {
+		return 0, err
+	}
+	return strconv.Atoi(strings.TrimSpace(string(out)))
 }
