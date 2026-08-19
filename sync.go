@@ -262,6 +262,10 @@ func (s *Syncer) Status() map[string]AccountStatus {
 // lacks it and does not speak English sets exclude_folders.
 var junkNames = []string{"junk", "spam", "trash", "deleted messages", "deleted items", "bulk mail"}
 
+// discoveryDialTimeout bounds connecting to an account's IMAP server during
+// SPECIAL-USE discovery.
+const discoveryDialTimeout = 30 * time.Second
+
 func wellKnownJunk(folders []string) []string {
 	var out []string
 	for _, f := range folders {
@@ -289,14 +293,18 @@ func wellKnownJunk(folders []string) []string {
 // fetches a message, and the client does not escape this function.
 func discoverSpecialUse(ctx context.Context, a Account) (special, all []string, err error) {
 	addr := net.JoinHostPort(a.Host, strconv.Itoa(a.Port))
+	// Bounds the connect: without it, an unreachable or silently-dropping
+	// host would hang here with no way to cancel it, since this loop runs at
+	// startup before the server begins listening.
+	dialer := &net.Dialer{Timeout: discoveryDialTimeout}
 	var c *imapclient.Client
 	switch a.TLS {
 	case "starttls":
-		c, err = imapclient.DialStartTLS(addr, nil)
+		c, err = imapclient.DialStartTLS(addr, &imapclient.Options{Dialer: dialer})
 	case "none":
-		c, err = imapclient.DialInsecure(addr, nil)
+		c, err = imapclient.DialInsecure(addr, &imapclient.Options{Dialer: dialer})
 	default:
-		c, err = imapclient.DialTLS(addr, &imapclient.Options{TLSConfig: &tls.Config{ServerName: a.Host}})
+		c, err = imapclient.DialTLS(addr, &imapclient.Options{TLSConfig: &tls.Config{ServerName: a.Host}, Dialer: dialer})
 	}
 	if err != nil {
 		return nil, nil, err

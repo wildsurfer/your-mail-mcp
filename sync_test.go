@@ -205,8 +205,12 @@ func TestSyncRefusesAnUninitialisedMaildir(t *testing.T) {
 func TestWellKnownJunkMatchesCommonNames(t *testing.T) {
 	got := wellKnownJunk([]string{
 		"INBOX", "Archive", "Junk", "Deleted Messages", "[Gmail]/Spam", "INBOX.Trash", "Projects",
+		"SPAM", "Deleted Items",
 	})
-	want := map[string]bool{"Junk": true, "Deleted Messages": true, "[Gmail]/Spam": true, "INBOX.Trash": true}
+	want := map[string]bool{
+		"Junk": true, "Deleted Messages": true, "[Gmail]/Spam": true, "INBOX.Trash": true,
+		"SPAM": true, "Deleted Items": true,
+	}
 	if len(got) != len(want) {
 		t.Fatalf("wellKnownJunk = %v, want %d entries", got, len(want))
 	}
@@ -255,6 +259,28 @@ func TestExcludedFoldersFallsBackToWellKnownNamesWhenSpecialUseIsEmpty(t *testin
 	}
 	if contains(got, "work/INBOX") || contains(got, "work/Archive") {
 		t.Errorf("excludedFolders = %v, non-junk folders must not be excluded", got)
+	}
+}
+
+// With no configured exclusions and a non-empty SPECIAL-USE result, tier 2
+// must pass special through unfiltered and prefixed, not run it through
+// wellKnownJunk. "Deleted Messages" sits in all but not in special: a
+// regression that ran all (rather than special) through wellKnownJunk would
+// pull it in too and fail the length check below.
+func TestExcludedFoldersPassesThroughSpecialUseWhenNoConfig(t *testing.T) {
+	a := Account{Name: "work"}
+	special := []string{"Junk", "Trash"}
+	all := []string{"INBOX", "Junk", "Trash", "Archive", "Deleted Messages"}
+	got := excludedFolders(context.Background(), a, special, all)
+	want := []string{"work/Junk", "work/Trash"}
+	if len(got) != len(want) {
+		t.Fatalf("excludedFolders = %v, want exactly %v", got, want)
+	}
+	for i, w := range want {
+		if got[i] != w {
+			t.Errorf("excludedFolders = %v, want exactly %v", got, want)
+			break
+		}
 	}
 }
 
