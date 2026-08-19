@@ -264,15 +264,16 @@ func TestExcludedFoldersFallsBackToWellKnownNamesWhenSpecialUseIsEmpty(t *testin
 
 // With no configured exclusions and a non-empty SPECIAL-USE result, tier 2
 // must pass special through unfiltered and prefixed, not run it through
-// wellKnownJunk. "Deleted Messages" sits in all but not in special: a
-// regression that ran all (rather than special) through wellKnownJunk would
-// pull it in too and fail the length check below.
+// wellKnownJunk. Both special values are names wellKnownJunk would reject
+// (a localised name and a name that isn't junk-shaped at all), so a
+// regression that filtered special through the name list would drop them
+// and fail this test.
 func TestExcludedFoldersPassesThroughSpecialUseWhenNoConfig(t *testing.T) {
 	a := Account{Name: "work"}
-	special := []string{"Junk", "Trash"}
-	all := []string{"INBOX", "Junk", "Trash", "Archive", "Deleted Messages"}
+	special := []string{"Papierkorb", "Custom Archive"}
+	all := []string{"INBOX", "Papierkorb", "Custom Archive", "Deleted Messages"}
 	got := excludedFolders(context.Background(), a, special, all)
-	want := []string{"work/Junk", "work/Trash"}
+	want := []string{"work/Custom Archive", "work/Papierkorb"}
 	if len(got) != len(want) {
 		t.Fatalf("excludedFolders = %v, want exactly %v", got, want)
 	}
