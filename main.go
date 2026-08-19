@@ -204,6 +204,17 @@ func run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	// Discover each account's junk and trash folders so search excludes them
+	// by default. A failing discovery is not fatal: the account simply has
+	// nothing excluded until the operator sets exclude_folders.
+	for _, a := range cfg.Accounts {
+		special, all, err := discoverSpecialUse(ctx, a)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "special-use discovery: account %s: %v\n", a.Name, err)
+		}
+		srv.excluded[a.Name] = excludedFolders(ctx, a, special, all)
+	}
+
 	go runTicker(ctx, e.SyncInterval, func(ctx context.Context) {
 		if _, err := syncer.Sync(ctx, "", ""); err != nil && !errors.Is(err, errSyncBusy) {
 			fmt.Fprintln(os.Stderr, "sync:", err)

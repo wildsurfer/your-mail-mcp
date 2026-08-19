@@ -201,3 +201,68 @@ func TestSyncRefusesAnUninitialisedMaildir(t *testing.T) {
 		t.Error("the first sync should leave the marker behind")
 	}
 }
+
+func TestWellKnownJunkMatchesCommonNames(t *testing.T) {
+	got := wellKnownJunk([]string{
+		"INBOX", "Archive", "Junk", "Deleted Messages", "[Gmail]/Spam", "INBOX.Trash", "Projects",
+	})
+	want := map[string]bool{"Junk": true, "Deleted Messages": true, "[Gmail]/Spam": true, "INBOX.Trash": true}
+	if len(got) != len(want) {
+		t.Fatalf("wellKnownJunk = %v, want %d entries", got, len(want))
+	}
+	for _, f := range got {
+		if !want[f] {
+			t.Errorf("wellKnownJunk returned unexpected folder %q", f)
+		}
+	}
+}
+
+// Config wins even when SPECIAL-USE discovery also found something: "SpecialJunk"
+// is a discovered special-use mailbox, but the account's own ExcludeFolders must
+// take priority over it.
+func TestExcludedFoldersPrefersConfigAndPrefixesTheAccount(t *testing.T) {
+	a := Account{Name: "work", ExcludeFolders: []string{"Rubbish"}}
+	got := excludedFolders(context.Background(), a, []string{"SpecialJunk"}, []string{"INBOX", "Rubbish", "Junk"})
+	for _, want := range []string{"work/Rubbish"} {
+		if !contains(got, want) {
+			t.Errorf("excludedFolders = %v, want it to contain %q", got, want)
+		}
+	}
+	if contains(got, "work/SpecialJunk") {
+		t.Errorf("excludedFolders = %v, config must win over discovered SPECIAL-USE folders", got)
+	}
+	for _, f := range got {
+		if !strings.HasPrefix(f, "work/") {
+			t.Errorf("folder %q is not prefixed with the account name", f)
+		}
+	}
+}
+
+// With no config and no SPECIAL-USE result, the third tier (name matching over
+// the full LIST) must fire: junk-shaped names are excluded, localised ones that
+// the English name list cannot recognise are left alone.
+func TestExcludedFoldersFallsBackToWellKnownNamesWhenSpecialUseIsEmpty(t *testing.T) {
+	a := Account{Name: "work"}
+	all := []string{"INBOX", "Archive", "[Gmail]/Spam", "INBOX.Trash", "Papierkorb"}
+	got := excludedFolders(context.Background(), a, nil, all)
+	for _, want := range []string{"work/[Gmail]/Spam", "work/INBOX.Trash"} {
+		if !contains(got, want) {
+			t.Errorf("excludedFolders = %v, want it to contain %q", got, want)
+		}
+	}
+	if contains(got, "work/Papierkorb") {
+		t.Errorf("excludedFolders = %v, the English name list must not match a localised name", got)
+	}
+	if contains(got, "work/INBOX") || contains(got, "work/Archive") {
+		t.Errorf("excludedFolders = %v, non-junk folders must not be excluded", got)
+	}
+}
+
+func contains(list []string, s string) bool {
+	for _, v := range list {
+		if v == s {
+			return true
+		}
+	}
+	return false
+}

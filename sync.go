@@ -2,15 +2,21 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/emersion/go-imap/v2"
+	"github.com/emersion/go-imap/v2/imapclient"
 )
 
 // AccountStatus is what the folders tool reports so a broken account is
@@ -246,5 +252,92 @@ func (s *Syncer) Status() map[string]AccountStatus {
 	for k, v := range s.status {
 		out[k] = v
 	}
+	return out
+}
+
+// junkNames is the fallback for servers that do not advertise RFC 6154. It is a
+// list of common English spellings and nothing more: folder names are localised
+// (Papierkorb, Corbeille, Papelera, Корзина), so this cannot be complete and is
+// not meant to be. SPECIAL-USE is the real mechanism; a user on a server that
+// lacks it and does not speak English sets exclude_folders.
+var junkNames = []string{"junk", "spam", "trash", "deleted messages", "deleted items", "bulk mail"}
+
+func wellKnownJunk(folders []string) []string {
+	var out []string
+	for _, f := range folders {
+		name := strings.ToLower(f)
+		// Strip a leading namespace so [Gmail]/Spam and INBOX.Trash match.
+		if i := strings.LastIndexAny(name, "/."); i >= 0 {
+			name = name[i+1:]
+		}
+		for _, known := range junkNames {
+			if name == known {
+				out = append(out, f)
+				break
+			}
+		}
+	}
+	return out
+}
+
+// discoverSpecialUse asks the server which mailboxes carry \Junk and \Trash. It
+// returns those alongside every mailbox name LIST returned, so a caller with no
+// SPECIAL-USE result can still fall back to name matching over the full list.
+//
+// This is the only IMAP conversation in the process: it connects, issues LIST,
+// reads folder attributes and closes. It never selects a mailbox and never
+// fetches a message, and the client does not escape this function.
+func discoverSpecialUse(ctx context.Context, a Account) (special, all []string, err error) {
+	addr := net.JoinHostPort(a.Host, strconv.Itoa(a.Port))
+	var c *imapclient.Client
+	switch a.TLS {
+	case "starttls":
+		c, err = imapclient.DialStartTLS(addr, nil)
+	case "none":
+		c, err = imapclient.DialInsecure(addr, nil)
+	default:
+		c, err = imapclient.DialTLS(addr, &imapclient.Options{TLSConfig: &tls.Config{ServerName: a.Host}})
+	}
+	if err != nil {
+		return nil, nil, err
+	}
+	defer c.Close()
+
+	if err := c.Login(a.User, a.Password).Wait(); err != nil {
+		return nil, nil, err
+	}
+	boxes, err := c.List("", "*", &imap.ListOptions{ReturnSpecialUse: true}).Collect()
+	if err != nil {
+		return nil, nil, err
+	}
+	for _, b := range boxes {
+		all = append(all, b.Mailbox)
+		for _, attr := range b.Attrs {
+			if attr == imap.MailboxAttrJunk || attr == imap.MailboxAttrTrash {
+				special = append(special, b.Mailbox)
+				break
+			}
+		}
+	}
+	_ = c.Logout().Wait()
+	return special, all, nil
+}
+
+// excludedFolders returns the folders to keep out of search for one account, as
+// notmuch folder paths. Config wins, then SPECIAL-USE, then the name list run
+// over every discovered mailbox.
+func excludedFolders(ctx context.Context, a Account, special, all []string) []string {
+	names := a.ExcludeFolders
+	if len(names) == 0 {
+		names = special
+	}
+	if len(names) == 0 {
+		names = wellKnownJunk(all)
+	}
+	out := make([]string, 0, len(names))
+	for _, n := range names {
+		out = append(out, a.Name+"/"+n)
+	}
+	sort.Strings(out)
 	return out
 }
