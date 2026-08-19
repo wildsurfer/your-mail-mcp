@@ -1,6 +1,18 @@
 package main
 
-import "fmt"
+import (
+	"fmt"
+	"time"
+)
+
+// AccountStatus is what the folders tool reports so a broken account is
+// visible without reading container logs. Defined here ahead of the syncer
+// (Task 7/Task 10) because Server.status, added in this task, already needs
+// the type to name its return value.
+type AccountStatus struct {
+	LastSync  time.Time
+	LastError string
+}
 
 // genNotmuchConfig writes the index configuration. mail_root points at the
 // maildir root so folder queries read "account/INBOX". Maildir flags are the
