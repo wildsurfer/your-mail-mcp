@@ -3,9 +3,13 @@ package main
 import (
 	"context"
 	"fmt"
+	"io/fs"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -299,4 +303,70 @@ func (s *Server) page(payload string, a idArgs) *mcp.CallToolResult {
 		body += fmt.Sprintf("\n[truncated; continue with offset=%d]", next)
 	}
 	return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: body}}}
+}
+
+// listFolders walks the maildir and returns, per account, the folder names in
+// the form a notmuch folder: query needs. A maildir folder is a directory
+// containing cur, new and tmp; anything else is sync state or noise.
+func listFolders(maildir string) (map[string][]string, error) {
+	out := map[string][]string{}
+	err := filepath.WalkDir(maildir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil || !d.IsDir() {
+			return err
+		}
+		for _, sub := range []string{"cur", "new", "tmp"} {
+			if fi, err := os.Stat(filepath.Join(path, sub)); err != nil || !fi.IsDir() {
+				return nil
+			}
+		}
+		rel, err := filepath.Rel(maildir, path)
+		if err != nil {
+			return err
+		}
+		account, _, found := strings.Cut(rel, string(filepath.Separator))
+		if !found {
+			account = rel
+		}
+		out[account] = append(out[account], filepath.ToSlash(rel))
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	for _, list := range out {
+		sort.Strings(list)
+	}
+	return out, nil
+}
+
+func (s *Server) foldersTool(ctx context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, any, error) {
+	folders, err := listFolders(s.maildir)
+	if err != nil {
+		return nil, nil, err
+	}
+	status := s.status()
+
+	var b strings.Builder
+	for _, a := range s.cfg.Accounts {
+		st := status[a.Name]
+		b.WriteString("account: " + a.Name + "\n")
+		if !st.LastSync.IsZero() {
+			b.WriteString("  last sync: " + st.LastSync.UTC().Format(time.RFC3339) + "\n")
+		} else {
+			b.WriteString("  last sync: never\n")
+		}
+		if st.LastError != "" {
+			b.WriteString("  last error: " + st.LastError + "\n")
+		}
+		if excluded := s.excluded[a.Name]; len(excluded) > 0 {
+			b.WriteString("  excluded from search: " + strings.Join(excluded, ", ") + "\n")
+		}
+		for _, f := range folders[a.Name] {
+			b.WriteString("  folder: " + f + "\n")
+		}
+	}
+	if out, err := s.nm.run(ctx, "search", "--output=tags", "*"); err == nil {
+		b.WriteString("tags: " + strings.Join(strings.Fields(string(out)), " ") + "\n")
+	}
+	return text(b.String()), nil, nil
 }

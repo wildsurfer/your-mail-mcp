@@ -4,8 +4,10 @@ import (
 	"context"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -290,5 +292,42 @@ func TestTextToolFallsBackWhenW3mUnavailable(t *testing.T) {
 	}
 	if !strings.HasPrefix(body, untrustedOpen) {
 		t.Error("fallback body is not wrapped as untrusted content")
+	}
+}
+
+func TestFoldersListsRealFoldersAndStatus(t *testing.T) {
+	s := testServer(t)
+	s.status = func() map[string]AccountStatus {
+		return map[string]AccountStatus{
+			"work":     {LastSync: time.Unix(1755500000, 0)},
+			"personal": {LastError: "AUTHENTICATIONFAILED"},
+		}
+	}
+
+	res, _, err := s.foldersTool(context.Background(), nil, struct{}{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := resultText(t, res)
+	for _, want := range []string{"work/INBOX", "work/Spam", "personal/INBOX", "AUTHENTICATIONFAILED"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("folders output is missing %q:\n%s", want, out)
+		}
+	}
+}
+
+func TestListFoldersIgnoresNonMaildirDirectories(t *testing.T) {
+	maildir, _, _ := newFixture(t, map[string][]string{"work/INBOX": {}})
+	if err := os.MkdirAll(filepath.Join(maildir, "work", "not-a-folder"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	folders, err := listFolders(maildir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range folders["work"] {
+		if strings.Contains(f, "not-a-folder") {
+			t.Errorf("listFolders returned a directory without cur/new/tmp: %v", folders)
+		}
 	}
 }
