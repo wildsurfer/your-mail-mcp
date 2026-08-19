@@ -673,7 +673,7 @@ func TestRenderWrapsContent(t *testing.T) {
 }
 
 func TestRenderPaginates(t *testing.T) {
-	body := strings.Repeat("a", 250)
+	body := strings.Repeat("x", 250) // not "a": the marker text contains "data"
 
 	text, truncated, next := render(body, 0, 100)
 	if !truncated {
@@ -682,8 +682,8 @@ func TestRenderPaginates(t *testing.T) {
 	if next != 100 {
 		t.Fatalf("next = %d, want 100", next)
 	}
-	if strings.Count(text, "a") != 100 {
-		t.Fatalf("got %d bytes of content, want 100", strings.Count(text, "a"))
+	if strings.Count(text, "x") != 100 {
+		t.Fatalf("got %d bytes of content, want 100", strings.Count(text, "x"))
 	}
 
 	text, truncated, next = render(body, 200, 100)
@@ -693,8 +693,8 @@ func TestRenderPaginates(t *testing.T) {
 	if next != 0 {
 		t.Errorf("next = %d on the final page, want 0", next)
 	}
-	if strings.Count(text, "a") != 50 {
-		t.Errorf("final page has %d bytes, want 50", strings.Count(text, "a"))
+	if strings.Count(text, "x") != 50 {
+		t.Errorf("final page has %d bytes, want 50", strings.Count(text, "x"))
 	}
 
 	if _, _, _ = render(body, 9999, 100); false {
