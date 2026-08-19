@@ -39,6 +39,11 @@ func validateQuery(q string) error {
 	for _, r := range q {
 		switch {
 		case r == '"':
+			if !inQuotes {
+				if err := flush(); err != nil {
+					return err
+				}
+			}
 			inQuotes = !inQuotes
 			word.Reset()
 		case inQuotes:

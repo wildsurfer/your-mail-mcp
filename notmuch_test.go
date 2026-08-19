@@ -25,6 +25,7 @@ func TestValidateQuery(t *testing.T) {
 		"fom:alice",         // typo, would silently match nothing
 		"sender:alice",      // not a notmuch prefix
 		"folder:INBOX and x:1",
+		"subjet:\"x\"",      // typo immediately followed by quote
 	}
 	for _, q := range bad {
 		err := validateQuery(q)
