@@ -266,3 +266,29 @@ func TestMessageQueryRejectsInjection(t *testing.T) {
 		t.Errorf("messageQuery = %q", q)
 	}
 }
+
+func TestTextToolFallsBackWhenW3mUnavailable(t *testing.T) {
+	s := testServer(t)
+	ctx := context.Background()
+
+	// Create a fake w3m that fails, prepend it to PATH so exec finds it first.
+	tmpdir := t.TempDir()
+	w3m := tmpdir + "/w3m"
+	if err := os.WriteFile(w3m, []byte("#!/bin/sh\nexit 1\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	oldPath := os.Getenv("PATH")
+	t.Setenv("PATH", tmpdir+":"+oldPath)
+
+	res, _, err := s.textTool(ctx, nil, idArgs{ID: "a1@example.com"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := resultText(t, res)
+	if !strings.Contains(body, "the invoice is attached") {
+		t.Errorf("fallback did not return the body: %s", body)
+	}
+	if !strings.HasPrefix(body, untrustedOpen) {
+		t.Error("fallback body is not wrapped as untrusted content")
+	}
+}
