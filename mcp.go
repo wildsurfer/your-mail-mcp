@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"regexp"
 	"sort"
 	"strings"
 
@@ -101,19 +100,17 @@ func (s *Server) excludeClause() string {
 	return " and not (" + strings.Join(quoted, " or ") + ")"
 }
 
-// tagTermRE matches unquoted tag:VALUE terms. A quoted value (tag:"a b") is
-// left alone rather than mis-parsed; notmuch tags cannot contain the
-// characters excluded here, so nothing legitimate is missed.
-var tagTermRE = regexp.MustCompile(`\btag:([^\s()"']+)`)
-
 // checkTags rejects a query naming a tag that does not exist in the index.
 // Without this, a mistyped tag:unred silently returns nothing, indistinguishable
 // from an empty mailbox. Only runs notmuch when the query actually mentions a
-// tag: term, and does not cache the tag set — one extra call per tagged query
-// is cheap enough that a cache would only add invalidation to think about.
+// tag: term (via extractTags, notmuch.go — the same quote-aware word scan
+// validateQuery uses, so a tag-looking substring inside a quoted value is not
+// mis-parsed), and does not cache the tag set — one extra call per tagged
+// query is cheap enough that a cache would only add invalidation to think
+// about.
 func (s *Server) checkTags(ctx context.Context, q string) error {
-	matches := tagTermRE.FindAllStringSubmatch(q, -1)
-	if len(matches) == 0 {
+	tags := extractTags(q)
+	if len(tags) == 0 {
 		return nil
 	}
 	out, err := s.nm.run(ctx, "search", "--output=tags", "*")
@@ -125,8 +122,8 @@ func (s *Server) checkTags(ctx context.Context, q string) error {
 	for _, t := range existing {
 		known[t] = true
 	}
-	for _, m := range matches {
-		if tag := m[1]; !known[tag] {
+	for _, tag := range tags {
+		if !known[tag] {
 			sort.Strings(existing)
 			return fmt.Errorf("unknown tag %q; existing tags are %s", tag, strings.Join(existing, ", "))
 		}

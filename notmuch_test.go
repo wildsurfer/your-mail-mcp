@@ -40,6 +40,20 @@ func TestValidateQuery(t *testing.T) {
 	}
 }
 
+func TestExtractTags(t *testing.T) {
+	// "tag:foo" inside a quoted subject value is realistic mail content, not
+	// hypothetical, and must not be read as a tag term — nor tag:"a b", whose
+	// value is itself quoted.
+	got := extractTags(`tag:work subject:"see tag:foo for details" tag:"a b"`)
+	if len(got) != 1 || got[0] != "work" {
+		t.Errorf("extractTags = %v, want [work]", got)
+	}
+
+	if got := extractTags("from:alice subject:invoice"); len(got) != 0 {
+		t.Errorf("extractTags with no tag: term = %v, want none", got)
+	}
+}
+
 func TestScopeQuery(t *testing.T) {
 	got, err := scopeQuery("from:alice", "work")
 	if err != nil {

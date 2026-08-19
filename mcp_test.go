@@ -118,6 +118,47 @@ func TestSearchExcludesJunkByDefault(t *testing.T) {
 	}
 }
 
+// TestSearchExcludesJunkWithAccountScope covers the composition
+// TestSearchExcludesJunkByDefault does not: an account-scoped query, where
+// scopeQuery has already turned "*" into "path:work/**" before the exclude
+// clause is appended (the "and not (...)" branch, not the bare-"*" one).
+func TestSearchExcludesJunkWithAccountScope(t *testing.T) {
+	s := testServer(t)
+	s.excluded = map[string][]string{"work": {"work/Spam"}}
+
+	res, _, err := s.searchTool(context.Background(), nil, searchArgs{Query: "*", Account: "work"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := resultText(t, res)
+	if !strings.Contains(text, "invoice 42") {
+		t.Error("work mail missing from an account-scoped search with exclusion active")
+	}
+	if strings.Contains(text, "you have won") {
+		t.Error("junk reached the model on an account-scoped search")
+	}
+}
+
+// TestSearchExcludesJunkWithNormalQuery covers the same "and not (...)"
+// composition as the account-scoped case above, but via an ordinary
+// non-wildcard query instead of an account restricting "*".
+func TestSearchExcludesJunkWithNormalQuery(t *testing.T) {
+	s := testServer(t)
+	s.excluded = map[string][]string{"work": {"work/Spam"}}
+
+	res, _, err := s.searchTool(context.Background(), nil, searchArgs{Query: "from:alice@example.com or from:spam@example.com"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := resultText(t, res)
+	if !strings.Contains(text, "invoice 42") {
+		t.Error("matching mail missing from a non-wildcard query with exclusion active")
+	}
+	if strings.Contains(text, "you have won") {
+		t.Error("junk reached the model on a non-wildcard query with exclusion active")
+	}
+}
+
 func TestCountAndIdsAgree(t *testing.T) {
 	s := testServer(t)
 	ctx := context.Background()
