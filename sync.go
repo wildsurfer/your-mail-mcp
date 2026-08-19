@@ -198,6 +198,11 @@ func (s *Syncer) Sync(ctx context.Context, account, folder string) (int, error) 
 		err := s.runCmd(accountCtx, "mbsync", "-c", s.mbsyncConfig, target)
 		cancel()
 		s.record(a.Name, err)
+		if err != nil {
+			// A failing account is skipped, not silent: anyone watching
+			// container logs should see it without knowing to call folders.
+			fmt.Fprintf(os.Stderr, "sync: account %s: %v\n", a.Name, err)
+		}
 		if ctx.Err() != nil {
 			return 0, ctx.Err()
 		}
