@@ -331,3 +331,36 @@ func TestListFoldersIgnoresNonMaildirDirectories(t *testing.T) {
 		}
 	}
 }
+
+func TestRefreshSyncsInboxOnly(t *testing.T) {
+	s := testServer(t)
+	var got [2]string
+	s.sync = func(_ context.Context, account, folder string) (int, error) {
+		got = [2]string{account, folder}
+		return 2, nil
+	}
+
+	res, _, err := s.refreshTool(context.Background(), nil, refreshArgs{Account: "work"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != [2]string{"work", "INBOX"} {
+		t.Errorf("refresh called sync%v, want [work INBOX]", got)
+	}
+	if !strings.Contains(resultText(t, res), "2") {
+		t.Errorf("refresh did not report the new message count: %s", resultText(t, res))
+	}
+}
+
+func TestRefreshReportsBusyWithoutFailing(t *testing.T) {
+	s := testServer(t)
+	s.sync = func(context.Context, string, string) (int, error) { return 0, errSyncBusy }
+
+	res, _, err := s.refreshTool(context.Background(), nil, refreshArgs{})
+	if err != nil {
+		t.Fatalf("a busy syncer is not a tool error: %v", err)
+	}
+	if !strings.Contains(resultText(t, res), "already running") {
+		t.Errorf("busy message missing: %s", resultText(t, res))
+	}
+}

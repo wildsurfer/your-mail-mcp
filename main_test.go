@@ -1,10 +1,12 @@
 package main
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func writeConfig(t *testing.T, body string) string {
@@ -94,5 +96,41 @@ func TestLoadConfigRejectsBadInput(t *testing.T) {
 				t.Errorf("error %q does not mention %q", err, tc.want)
 			}
 		})
+	}
+}
+
+func TestRunTickerFiresUntilCancelled(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	ticks := make(chan struct{}, 4)
+	go runTicker(ctx, time.Millisecond, func(context.Context) { ticks <- struct{}{} })
+
+	for i := 0; i < 2; i++ {
+		select {
+		case <-ticks:
+		case <-time.After(2 * time.Second):
+			t.Fatal("ticker did not fire")
+		}
+	}
+	cancel()
+}
+
+func TestLoadEnvRequiresTheEssentials(t *testing.T) {
+	t.Setenv("CONFIG", "")
+	if _, err := loadEnv(); err == nil {
+		t.Fatal("want an error when CONFIG is unset")
+	}
+
+	t.Setenv("CONFIG", "/tmp/accounts.json")
+	t.Setenv("MAILDIR", "/mail")
+	t.Setenv("INDEX", "/index")
+	e, err := loadEnv()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if e.SyncInterval != 5*time.Minute {
+		t.Errorf("SyncInterval = %v, want the 5m default", e.SyncInterval)
+	}
+	if e.ListenAddr != ":8080" {
+		t.Errorf("ListenAddr = %q, want the :8080 default", e.ListenAddr)
 	}
 }

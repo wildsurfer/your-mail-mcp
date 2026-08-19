@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -58,8 +59,12 @@ type Server struct {
 	// which simply means nothing is excluded.
 	excluded map[string][]string
 
-	// status reports per-account sync state. Wired to the syncer in Task 10.
+	// status reports per-account sync state. Wired to the syncer in run().
 	status func() map[string]AccountStatus
+
+	// sync triggers a sync of one account's folder ("" account means all
+	// accounts). Wired to the syncer's Sync method in run().
+	sync func(ctx context.Context, account, folder string) (int, error)
 }
 
 func newServer(cfg *Config, nm *Notmuch, maildir string) *Server {
@@ -69,6 +74,7 @@ func newServer(cfg *Config, nm *Notmuch, maildir string) *Server {
 		maildir:  maildir,
 		excluded: map[string][]string{},
 		status:   func() map[string]AccountStatus { return map[string]AccountStatus{} },
+		sync:     func(context.Context, string, string) (int, error) { return 0, nil },
 	}
 }
 
@@ -369,4 +375,33 @@ func (s *Server) foldersTool(ctx context.Context, _ *mcp.CallToolRequest, _ stru
 		b.WriteString("tags: " + strings.Join(strings.Fields(string(out)), " ") + "\n")
 	}
 	return text(b.String()), nil, nil
+}
+
+type refreshArgs struct {
+	Account string `json:"account,omitempty"`
+}
+
+// refreshTool syncs INBOX only. A full pass over every folder of every account
+// does not fit inside a tool call, and the client would time out waiting.
+func (s *Server) refreshTool(ctx context.Context, _ *mcp.CallToolRequest, a refreshArgs) (*mcp.CallToolResult, any, error) {
+	n, err := s.sync(ctx, a.Account, "INBOX")
+	if errors.Is(err, errSyncBusy) {
+		return text("a sync is already running; try again shortly"), nil, nil
+	}
+	if err != nil {
+		return nil, nil, err
+	}
+	return text(fmt.Sprintf("%d new message(s)", n)), nil, nil
+}
+
+func (s *Server) registerTools(m *mcp.Server) {
+	mcp.AddTool(m, &mcp.Tool{Name: "search", Description: "Search mail. Returns thread summaries as JSON. Query syntax is notmuch: from: to: subject: tag: folder: date:2026-01-01..2026-06-30, combined with and/or/not."}, s.searchTool)
+	mcp.AddTool(m, &mcp.Tool{Name: "ids", Description: "Return the message ids matching a query."}, s.idsTool)
+	mcp.AddTool(m, &mcp.Tool{Name: "files", Description: "Return the maildir file paths matching a query."}, s.filesTool)
+	mcp.AddTool(m, &mcp.Tool{Name: "count", Description: "Count the messages matching a query."}, s.countTool)
+	mcp.AddTool(m, &mcp.Tool{Name: "show", Description: "Show one message: headers and decoded body, as JSON."}, s.showTool)
+	mcp.AddTool(m, &mcp.Tool{Name: "thread", Description: "Show the whole thread containing a message."}, s.threadTool)
+	mcp.AddTool(m, &mcp.Tool{Name: "text", Description: "Return the plain-text body of one message, converting HTML."}, s.textTool)
+	mcp.AddTool(m, &mcp.Tool{Name: "folders", Description: "List accounts, their folders, index tags, and each account's last sync and last error."}, s.foldersTool)
+	mcp.AddTool(m, &mcp.Tool{Name: "refresh", Description: "Sync INBOX now and report how many messages arrived. Use when mail may have arrived in the last few minutes."}, s.refreshTool)
 }

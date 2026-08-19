@@ -1,11 +1,19 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
+	"os/signal"
+	"path/filepath"
 	"strings"
+	"syscall"
+	"time"
 	"unicode"
+
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 // Account is one IMAP account to mirror. Everything except name, host, user
@@ -96,8 +104,115 @@ func loadConfig(path string) (*Config, error) {
 	return &cfg, nil
 }
 
+type env struct {
+	Config       string
+	Maildir      string
+	Index        string
+	PublicURL    string
+	ListenAddr   string
+	Passphrase   string
+	SyncInterval time.Duration
+	InitMirror   bool
+}
+
+func loadEnv() (*env, error) {
+	e := &env{
+		Config:       os.Getenv("CONFIG"),
+		Maildir:      os.Getenv("MAILDIR"),
+		Index:        os.Getenv("INDEX"),
+		PublicURL:    os.Getenv("PUBLIC_URL"),
+		ListenAddr:   os.Getenv("LISTEN_ADDR"),
+		Passphrase:   os.Getenv("OAUTH_PASSPHRASE"),
+		SyncInterval: 5 * time.Minute,
+		InitMirror:   os.Getenv("INIT_MIRROR") == "1",
+	}
+	for name, v := range map[string]string{"CONFIG": e.Config, "MAILDIR": e.Maildir, "INDEX": e.Index} {
+		if v == "" {
+			return nil, fmt.Errorf("%s is required", name)
+		}
+	}
+	if e.ListenAddr == "" {
+		e.ListenAddr = ":8080"
+	}
+	if s := os.Getenv("SYNC_INTERVAL"); s != "" {
+		d, err := time.ParseDuration(s)
+		if err != nil {
+			return nil, fmt.Errorf("SYNC_INTERVAL: %w", err)
+		}
+		e.SyncInterval = d
+	}
+	return e, nil
+}
+
+// runTicker calls fn every interval until ctx is cancelled. It does not fire
+// overlapping passes itself; fn (the syncer) is responsible for refusing a
+// concurrent run, since the ticker has no way to know how long fn will take.
+func runTicker(ctx context.Context, every time.Duration, fn func(context.Context)) {
+	t := time.NewTicker(every)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			fn(ctx)
+		}
+	}
+}
+
 func main() {
-	// Wired in Task 8; kept minimal so the package builds from Task 1 onward.
-	fmt.Fprintln(os.Stderr, "your-mail-mcp: not yet wired")
-	os.Exit(1)
+	if err := run(); err != nil {
+		fmt.Fprintln(os.Stderr, "your-mail-mcp:", err)
+		os.Exit(1)
+	}
+}
+
+func run() error {
+	e, err := loadEnv()
+	if err != nil {
+		return err
+	}
+	cfg, err := loadConfig(e.Config)
+	if err != nil {
+		return err
+	}
+
+	// Generated configs live in a directory only this process writes, so the
+	// read-only mbsync directives cannot be edited underneath us.
+	runtimeDir, err := os.MkdirTemp("", "your-mail-mcp")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(runtimeDir)
+	mbsyncPath := filepath.Join(runtimeDir, "mbsyncrc")
+	notmuchPath := filepath.Join(runtimeDir, "notmuch-config")
+	if err := os.WriteFile(mbsyncPath, []byte(genMbsyncrc(cfg, e.Maildir)), 0o600); err != nil {
+		return err
+	}
+	if err := os.WriteFile(notmuchPath, []byte(genNotmuchConfig(e.Maildir, e.Index)), 0o600); err != nil {
+		return err
+	}
+
+	nm := newNotmuch(notmuchPath)
+	syncer := newSyncer(cfg, e.Maildir, mbsyncPath, nm)
+	syncer.initMirror = e.InitMirror
+
+	srv := newServer(cfg, nm, e.Maildir)
+	srv.sync = syncer.Sync
+	srv.status = syncer.Status
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	go runTicker(ctx, e.SyncInterval, func(ctx context.Context) {
+		if _, err := syncer.Sync(ctx, "", ""); err != nil && !errors.Is(err, errSyncBusy) {
+			fmt.Fprintln(os.Stderr, "sync:", err)
+		}
+	})
+
+	m := mcp.NewServer(&mcp.Implementation{Name: "your-mail-mcp", Version: "0.1.0"}, nil)
+	srv.registerTools(m)
+	// Stdio here is a development harness. The shipped transport is HTTP and
+	// arrives in Task 17.
+	return m.Run(ctx, &mcp.StdioTransport{})
 }
