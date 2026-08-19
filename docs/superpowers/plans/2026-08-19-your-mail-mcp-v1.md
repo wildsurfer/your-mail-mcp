@@ -302,6 +302,7 @@ func TestValidateQuery(t *testing.T) {
 		"fom:alice",         // typo, would silently match nothing
 		"sender:alice",      // not a notmuch prefix
 		"folder:INBOX and x:1",
+		`subjet:"x"`,        // a typo directly before a quoted value
 	}
 	for _, q := range bad {
 		err := validateQuery(q)
@@ -388,6 +389,13 @@ func validateQuery(q string) error {
 	for _, r := range q {
 		switch {
 		case r == '"':
+			// Flush before opening a quote, or the prefix that precedes it is
+			// discarded unchecked and bogus:"x" validates clean.
+			if !inQuotes {
+				if err := flush(); err != nil {
+					return err
+				}
+			}
 			inQuotes = !inQuotes
 			word.Reset()
 		case inQuotes:
