@@ -1,0 +1,16 @@
+{
+  "accounts": [
+    {
+      "name": "work",
+      "host": "imap.gmail.com",
+      "user": "you@example.com",
+      "password": "${WORK_PASS}"
+    },
+    {
+      "name": "personal",
+      "host": "imap.mail.me.com",
+      "user": "shortname",
+      "password": "${PERSONAL_PASS}"
+    }
+  ]
+}
