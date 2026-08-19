@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"os/exec"
 	"sort"
 	"strings"
 
@@ -218,4 +219,84 @@ func (s *Server) countTool(ctx context.Context, _ *mcp.CallToolRequest, a queryA
 		return nil, nil, err
 	}
 	return text(fmt.Sprintf("%d", n)), nil, nil
+}
+
+type idArgs struct {
+	ID     string `json:"id"`
+	Offset int    `json:"offset,omitempty"`
+	Limit  int    `json:"limit,omitempty"`
+}
+
+// messageQuery turns a Message-ID into a notmuch query. The id arrives from the
+// model, which read it out of mail, so it is untrusted input to a query string:
+// anything that could terminate the quoted term or add a clause is rejected.
+func messageQuery(id string) (string, error) {
+	if id == "" {
+		return "", fmt.Errorf("id is required")
+	}
+	if strings.ContainsAny(id, ` "'()`) {
+		return "", fmt.Errorf("invalid message id %q", id)
+	}
+	return fmt.Sprintf("id:%q", id), nil
+}
+
+func (s *Server) showTool(ctx context.Context, _ *mcp.CallToolRequest, a idArgs) (*mcp.CallToolResult, any, error) {
+	q, err := messageQuery(a.ID)
+	if err != nil {
+		return nil, nil, err
+	}
+	out, err := s.nm.run(ctx, "show", "--format=json", "--body=true", "--entire-thread=false", q)
+	if err != nil {
+		return nil, nil, err
+	}
+	return s.page(string(out), a), nil, nil
+}
+
+func (s *Server) threadTool(ctx context.Context, _ *mcp.CallToolRequest, a idArgs) (*mcp.CallToolResult, any, error) {
+	q, err := messageQuery(a.ID)
+	if err != nil {
+		return nil, nil, err
+	}
+	out, err := s.nm.run(ctx, "show", "--format=json", "--body=true", "--entire-thread=true", q)
+	if err != nil {
+		return nil, nil, err
+	}
+	return s.page(string(out), a), nil, nil
+}
+
+// textTool returns a readable body. HTML-only mail is passed through w3m; if
+// w3m is missing or fails, notmuch's own text rendering is used, so the tool
+// degrades instead of erroring.
+func (s *Server) textTool(ctx context.Context, _ *mcp.CallToolRequest, a idArgs) (*mcp.CallToolResult, any, error) {
+	q, err := messageQuery(a.ID)
+	if err != nil {
+		return nil, nil, err
+	}
+	raw, err := s.nm.run(ctx, "show", "--format=raw", q)
+	if err != nil {
+		return nil, nil, err
+	}
+	cmd := exec.CommandContext(ctx, "w3m", "-dump", "-T", "message/rfc822")
+	cmd.Stdin = strings.NewReader(string(raw))
+	out, wErr := cmd.Output()
+	if wErr != nil {
+		out, err = s.nm.run(ctx, "show", "--format=text", q)
+		if err != nil {
+			return nil, nil, err
+		}
+	}
+	return s.page(string(out), a), nil, nil
+}
+
+// page applies the caller's window to a payload, through render.
+func (s *Server) page(payload string, a idArgs) *mcp.CallToolResult {
+	limit := a.Limit
+	if limit <= 0 || limit > maxPayload {
+		limit = maxPayload
+	}
+	body, truncated, next := render(payload, a.Offset, limit)
+	if truncated {
+		body += fmt.Sprintf("\n[truncated; continue with offset=%d]", next)
+	}
+	return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: body}}}
 }

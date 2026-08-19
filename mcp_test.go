@@ -226,3 +226,43 @@ func resultText(t *testing.T, res *mcp.CallToolResult) string {
 	}
 	return tc.Text
 }
+
+func TestShowAndTextReturnTheMessage(t *testing.T) {
+	s := testServer(t)
+	ctx := context.Background()
+
+	res, _, err := s.showTool(ctx, nil, idArgs{ID: "a1@example.com"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(resultText(t, res), "invoice 42") {
+		t.Errorf("show did not return the message: %s", resultText(t, res))
+	}
+
+	res, _, err = s.textTool(ctx, nil, idArgs{ID: "a1@example.com"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := resultText(t, res)
+	if !strings.Contains(body, "the invoice is attached") {
+		t.Errorf("text did not return the body: %s", body)
+	}
+	if !strings.HasPrefix(body, untrustedOpen) {
+		t.Error("message body is not wrapped as untrusted content")
+	}
+}
+
+func TestMessageQueryRejectsInjection(t *testing.T) {
+	for _, id := range []string{`a" or path:**`, "a and tag:unread", "a b"} {
+		if _, err := messageQuery(id); err == nil {
+			t.Errorf("messageQuery(%q) = nil error, want rejection", id)
+		}
+	}
+	q, err := messageQuery("a1@example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if q != `id:"a1@example.com"` {
+		t.Errorf("messageQuery = %q", q)
+	}
+}
