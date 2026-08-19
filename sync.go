@@ -82,7 +82,11 @@ func genMbsyncrc(cfg *Config, maildir string) string {
 		b.WriteString("\nChannel " + a.Name + "\n")
 		b.WriteString("Far :" + a.Name + "-remote:\n")
 		b.WriteString("Near :" + a.Name + "-local:\n")
-		b.WriteString("Patterns " + strings.Join(a.Patterns, " ") + "\n")
+		pats := make([]string, len(a.Patterns))
+		for i, p := range a.Patterns {
+			pats[i] = quoteMbsync(p)
+		}
+		b.WriteString("Patterns " + strings.Join(pats, " ") + "\n")
 		// The read-only guarantee. Do not add a blank line above this comment.
 		b.WriteString("Sync Pull\n")
 		b.WriteString("Create Near\n")

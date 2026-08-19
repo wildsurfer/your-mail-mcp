@@ -71,6 +71,18 @@ func TestLoadConfigRejectsBadInput(t *testing.T) {
 			`{"accounts":[]}`,
 			"no accounts",
 		},
+		"space in host": {
+			`{"accounts":[{"name":"a","host":"imap gmail.com","user":"u","password":"p"}]}`,
+			"host",
+		},
+		"tab in user": {
+			`{"accounts":[{"name":"a","host":"h","user":"me@example.com\ttab","password":"p"}]}`,
+			"user",
+		},
+		"space in user": {
+			`{"accounts":[{"name":"a","host":"h","user":"me user","password":"p"}]}`,
+			"user",
+		},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {

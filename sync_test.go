@@ -29,8 +29,8 @@ func TestGenMbsyncrcIsPullOnlyForEveryAccount(t *testing.T) {
 	if !strings.Contains(out, "TLSType IMAPS") || !strings.Contains(out, "TLSType STARTTLS") {
 		t.Error("both TLS modes should appear, one per account")
 	}
-	if !strings.Contains(out, "Patterns INBOX Archive") {
-		t.Error("per-account patterns are missing")
+	if !strings.Contains(out, `Patterns "INBOX" "Archive"`) {
+		t.Error("per-account patterns are missing or not quoted")
 	}
 	if !strings.Contains(out, "Path /mail/work/") || !strings.Contains(out, "Path /mail/home/") {
 		t.Error("each account must have its own directory under the maildir root")
@@ -66,5 +66,35 @@ func TestGenMbsyncrcEscapesPasswords(t *testing.T) {
 	}}
 	if !strings.Contains(genMbsyncrc(cfg, "/mail"), `Pass "pa\"ss\\word"`) {
 		t.Error("password quoting is wrong; mbsync would read a truncated secret")
+	}
+}
+
+func TestGenMbsyncrcQuotesPatterns(t *testing.T) {
+	cfg := &Config{Accounts: []Account{
+		{Name: "work", Host: "h", Port: 993, User: "u", Password: "p", TLS: "imaps", Patterns: []string{"Sent Items", "INBOX"}},
+	}}
+	out := genMbsyncrc(cfg, "/mail")
+	if !strings.Contains(out, `Patterns "Sent Items" "INBOX"`) {
+		t.Error("patterns must be individually quoted; got: " + out)
+	}
+}
+
+func TestGenMbsyncrcQuotesWildcardPattern(t *testing.T) {
+	cfg := &Config{Accounts: []Account{
+		{Name: "work", Host: "h", Port: 993, User: "u", Password: "p", TLS: "imaps", Patterns: []string{"*"}},
+	}}
+	out := genMbsyncrc(cfg, "/mail")
+	if !strings.Contains(out, `Patterns "*"`) {
+		t.Error("wildcard pattern must be quoted")
+	}
+}
+
+func TestGenMbsyncrcQuotesNegationPattern(t *testing.T) {
+	cfg := &Config{Accounts: []Account{
+		{Name: "work", Host: "h", Port: 993, User: "u", Password: "p", TLS: "imaps", Patterns: []string{"!Trash"}},
+	}}
+	out := genMbsyncrc(cfg, "/mail")
+	if !strings.Contains(out, `Patterns "!Trash"`) {
+		t.Error("negation pattern must be quoted")
 	}
 }

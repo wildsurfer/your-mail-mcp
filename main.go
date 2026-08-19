@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"unicode"
 )
 
 // Account is one IMAP account to mirror. Everything except name, host, user
@@ -23,6 +24,16 @@ type Account struct {
 
 type Config struct {
 	Accounts []Account `json:"accounts"`
+}
+
+// hasWhitespaceOrControl returns true if s contains any whitespace or control character.
+func hasWhitespaceOrControl(s string) bool {
+	for _, r := range s {
+		if unicode.IsSpace(r) || unicode.IsControl(r) {
+			return true
+		}
+	}
+	return false
 }
 
 // loadConfig reads the accounts file, expands ${VAR} references against the
@@ -52,8 +63,14 @@ func loadConfig(path string) (*Config, error) {
 		if a.Host == "" {
 			return nil, fmt.Errorf("account %q: host is required", a.Name)
 		}
+		if hasWhitespaceOrControl(a.Host) {
+			return nil, fmt.Errorf("account %q: host must not contain whitespace or control characters", a.Name)
+		}
 		if a.User == "" {
 			return nil, fmt.Errorf("account %q: user is required", a.Name)
+		}
+		if hasWhitespaceOrControl(a.User) {
+			return nil, fmt.Errorf("account %q: user must not contain whitespace or control characters", a.Name)
 		}
 		if a.Password == "" {
 			return nil, fmt.Errorf("account %q: password is empty; is the referenced environment variable set?", a.Name)
