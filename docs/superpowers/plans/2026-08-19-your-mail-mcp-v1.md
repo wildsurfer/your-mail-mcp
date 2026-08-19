@@ -1540,7 +1540,14 @@ func genMbsyncrc(cfg *Config, maildir string) string {
 		b.WriteString("\nChannel " + a.Name + "\n")
 		b.WriteString("Far :" + a.Name + "-remote:\n")
 		b.WriteString("Near :" + a.Name + "-local:\n")
-		b.WriteString("Patterns " + strings.Join(a.Patterns, " ") + "\n")
+		// Each pattern is quoted individually: unquoted, `Patterns Sent Items`
+		// parses as two globs, so an Exchange "Sent Items" folder silently falls
+		// out of scope. Verified against mbsync 1.5.1, including "*" and "!Trash".
+		pats := make([]string, len(a.Patterns))
+		for i, pat := range a.Patterns {
+			pats[i] = quoteMbsync(pat)
+		}
+		b.WriteString("Patterns " + strings.Join(pats, " ") + "\n")
 		// The read-only guarantee. Do not add a blank line above this comment.
 		b.WriteString("Sync Pull\n")
 		b.WriteString("Create Near\n")
