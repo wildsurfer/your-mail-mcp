@@ -12,7 +12,7 @@
 
 ## Global Constraints
 
-- Module path `github.com/wildsurfer/your-mail-mcp`. Go 1.23 or later.
+- Module path `github.com/wildsurfer/your-mail-mcp`. Go 1.25 or later — `modelcontextprotocol/go-sdk` v1.7.0 declares `go 1.25.0`, so the earlier 1.23 floor is unreachable.
 - **Exactly two dependencies are permitted**: `github.com/modelcontextprotocol/go-sdk` and `github.com/emersion/go-imap/v2`. Everything else is standard library. Adding a third needs a decision, not a commit.
 - All Go source lives in the repository root as `package main`, in five files: `main.go`, `mcp.go`, `notmuch.go`, `sync.go`, `oauth.go`. Tests are `*_test.go` beside them.
 - Tests use `testing` from the standard library. No test framework, no assertion library, no mocking library.
@@ -979,7 +979,14 @@ func (s *Server) buildQuery(q, account string, includeExcluded bool) (string, er
 	if includeExcluded {
 		return scoped, nil
 	}
-	return scoped + s.excludeClause(), nil
+	clause := s.excludeClause()
+	// notmuch's parser special-cases a bare "*" and refuses to compose it with
+	// AND NOT; `(*) and not (...)` parses but returns nothing, which is worse.
+	// "not (...)" alone already means everything-except.
+	if scoped == "*" && clause != "" {
+		return strings.TrimPrefix(clause, " and "), nil
+	}
+	return scoped + clause, nil
 }
 
 func text(payload string) *mcp.CallToolResult {
@@ -1285,12 +1292,12 @@ Expected: `undefined: foldersTool`, `undefined: AccountStatus`.
 
 - [ ] **Step 3: Write the implementation**
 
-```go
-// append to sync.go
-import "time"
+`AccountStatus` is already defined in `sync.go`: Task 5's `Server` struct
+references it, so it had to land there. Confirm the existing definition matches
+the shape below and move on — re-declaring it is a compile error.
 
-// AccountStatus is what the folders tool reports so a broken account is visible
-// without reading container logs.
+```go
+// already present in sync.go
 type AccountStatus struct {
 	LastSync  time.Time
 	LastError string
@@ -2322,7 +2329,7 @@ git commit -m "Discover junk and trash folders through IMAP SPECIAL-USE, with a 
 - [ ] **Step 1: Write the Dockerfile**
 
 ```dockerfile
-FROM golang:1.23-bookworm AS build
+FROM golang:1.25-bookworm AS build
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
