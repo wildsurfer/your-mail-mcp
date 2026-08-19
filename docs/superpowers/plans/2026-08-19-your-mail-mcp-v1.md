@@ -527,7 +527,7 @@ func TestNotmuchCountsAndScopes(t *testing.T) {
 		},
 	})
 	n := newNotmuch(config)
-	ctx := t.Context()
+	ctx := context.Background() // t.Context() is Go 1.24+; go.mod pins 1.23
 
 	total, err := n.count(ctx, "*")
 	if err != nil {
