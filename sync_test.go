@@ -1,7 +1,12 @@
 package main
 
 import (
+	"context"
+	"errors"
+	"os"
+	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -96,5 +101,103 @@ func TestGenMbsyncrcQuotesNegationPattern(t *testing.T) {
 	out := genMbsyncrc(cfg, "/mail")
 	if !strings.Contains(out, `Patterns "!Trash"`) {
 		t.Error("negation pattern must be quoted")
+	}
+}
+
+func testSyncer(t *testing.T) (*Syncer, *[]string) {
+	t.Helper()
+	maildir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(maildir, markerFile), []byte("ok"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := &Config{Accounts: []Account{{Name: "work"}, {Name: "home"}}}
+	s := newSyncer(cfg, maildir, "/tmp/mbsyncrc", nil)
+	var calls []string
+	s.runCmd = func(_ context.Context, _ string, args ...string) error {
+		calls = append(calls, args[len(args)-1])
+		if strings.HasPrefix(args[len(args)-1], "work") {
+			return errors.New("AUTHENTICATIONFAILED")
+		}
+		return nil
+	}
+	s.reindex = func(context.Context) (int, error) { return 3, nil }
+	return s, &calls
+}
+
+func TestSyncContinuesAfterOneAccountFails(t *testing.T) {
+	s, calls := testSyncer(t)
+
+	added, err := s.Sync(context.Background(), "", "")
+	if err != nil {
+		t.Fatalf("a failing account must not fail the pass: %v", err)
+	}
+	if added != 3 {
+		t.Errorf("added = %d, want the reindex result 3", added)
+	}
+	if len(*calls) != 2 {
+		t.Fatalf("mbsync ran %d times, want once per account: %v", len(*calls), *calls)
+	}
+
+	st := s.Status()
+	if st["work"].LastError == "" {
+		t.Error("the failing account has no recorded error")
+	}
+	if st["home"].LastError != "" {
+		t.Errorf("the healthy account recorded an error: %q", st["home"].LastError)
+	}
+	if st["home"].LastSync.IsZero() {
+		t.Error("the healthy account has no last-sync time")
+	}
+}
+
+func TestSyncOneAccountAndFolder(t *testing.T) {
+	s, calls := testSyncer(t)
+	if _, err := s.Sync(context.Background(), "home", "INBOX"); err != nil {
+		t.Fatal(err)
+	}
+	if len(*calls) != 1 || (*calls)[0] != "home:INBOX" {
+		t.Errorf("calls = %v, want [home:INBOX]", *calls)
+	}
+}
+
+func TestSyncIsSerialised(t *testing.T) {
+	s, _ := testSyncer(t)
+	release := make(chan struct{})
+	entered := make(chan struct{})
+	s.runCmd = func(context.Context, string, ...string) error {
+		close(entered)
+		<-release
+		return nil
+	}
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		_, _ = s.Sync(context.Background(), "home", "")
+	}()
+	<-entered
+
+	if _, err := s.Sync(context.Background(), "work", ""); !errors.Is(err, errSyncBusy) {
+		t.Fatalf("second concurrent sync returned %v, want errSyncBusy", err)
+	}
+	close(release)
+	wg.Wait()
+}
+
+func TestSyncRefusesAnUninitialisedMaildir(t *testing.T) {
+	s, _ := testSyncer(t)
+	if err := os.Remove(filepath.Join(s.maildir, markerFile)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Sync(context.Background(), "", ""); err == nil {
+		t.Fatal("want a refusal when the maildir is not initialised")
+	}
+
+	s.initMirror = true
+	if _, err := s.Sync(context.Background(), "", ""); err != nil {
+		t.Fatalf("INIT_MIRROR should allow the first sync: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(s.maildir, markerFile)); err != nil {
+		t.Error("the first sync should leave the marker behind")
 	}
 }
