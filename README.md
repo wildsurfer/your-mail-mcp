@@ -53,36 +53,272 @@ Nine tools, all read-only:
 and/or/not), an optional `account` to scope to one account, and can include
 junk/trash with `include_excluded`.
 
-## Quick start
+## Running it
+
+There are three ways to run this. They differ in one thing: who can reach the
+server. Start at case 1, move up only when you need to.
+
+| | Where it runs | Who can reach it | Your mail is stored on |
+|---|---|---|---|
+| **1** | your machine | that machine only | your machine |
+| **2** | your machine | you, from anywhere | your machine |
+| **3** | a VPS | you, from anywhere | a rented disk |
+
+Every case needs the same two things first: an accounts file and a passphrase.
 
 ```bash
 cp accounts.example.json accounts.json
 ```
 
-Edit `accounts.json` with your accounts (see [The accounts
-file](#the-accounts-file) below), then set the environment variables the file
-references — `WORK_PASS` and `PERSONAL_PASS` for the example — plus
-`PUBLIC_URL` and `OAUTH_PASSPHRASE`, in a `.env` file next to `compose.yaml`
-or in your shell:
+Edit it with your accounts (see [The accounts file](#the-accounts-file)), then
+put the secrets it references in a `.env` file next to `compose.yaml`:
 
 ```bash
-export PUBLIC_URL=https://mail.example.com
-export OAUTH_PASSPHRASE=some-long-passphrase
-export WORK_PASS=...
-export PERSONAL_PASS=...
+# .env
+OAUTH_PASSPHRASE=pick-a-long-one-you-can-type-on-a-phone
+WORK_PASS=your-gmail-app-password
+PERSONAL_PASS=your-icloud-app-specific-password
+```
+
+`OAUTH_PASSPHRASE` is the only credential between the internet and your mail
+in cases 2 and 3. Treat it accordingly.
+
+Both `.env` and `accounts.json` are in `.gitignore`. If you copy this setup
+somewhere else, keep them out of version control there too.
+
+---
+
+### Case 1 — on your machine, for your machine only
+
+The server binds to loopback. Nothing outside your machine can reach it, so
+there is no TLS to arrange and no hostname to own. Your CLI tools can use it;
+your phone cannot.
+
+Add one line to `.env`:
+
+```bash
+PUBLIC_URL=http://127.0.0.1:8080
 ```
 
 Then start it:
 
 ```bash
 docker compose up -d
+docker compose logs -f          # watch the first sync
 ```
 
-The first run populates the maildir, which takes a while for a large mailbox
-and is slower than later runs on purpose — one IMAP command at a time is
-easier on providers that throttle. There is no separate initialization step.
+The first sync populates the maildir and takes a while on a large mailbox. It
+is deliberately slower than it could be, one IMAP command at a time, because
+providers throttle. There is no separate initialization step.
 
-Call the `folders` tool to confirm both accounts synced with no errors.
+**Claude Code**
+
+```bash
+claude mcp add --transport http your-mail http://127.0.0.1:8080/mcp
+```
+
+Then inside Claude Code run `/mcp`, pick `your-mail`, and authenticate. A
+browser opens the consent page, which asks for one thing: your
+`OAUTH_PASSPHRASE`. `claude mcp list` shows `Needs authentication` until you
+have done this, and connected afterwards.
+
+**Codex**
+
+```bash
+codex mcp add your-mail --url http://127.0.0.1:8080/mcp
+codex mcp login your-mail
+```
+
+`codex mcp list` shows the auth status. If the tools do not appear in a
+session after a successful login, that is a known Codex bug where OAuth
+credentials are obtained but never used
+([openai/codex#20009](https://github.com/openai/codex/issues/20009)); the
+workaround is the `mcp-remote` bridge below.
+
+<details>
+<summary>Fallback for any client whose OAuth support is broken</summary>
+
+`mcp-remote` handles the OAuth dance itself and exposes the result over
+stdio, which every MCP client supports:
+
+```toml
+# ~/.codex/config.toml
+[mcp_servers.your-mail]
+command = "npx"
+args = ["-y", "mcp-remote", "http://127.0.0.1:8080/mcp"]
+```
+
+It opens the same consent page on first run and caches the tokens.
+</details>
+
+---
+
+### Case 2 — on your machine, reachable from anywhere
+
+Same server, plus a tunnel that gives it a public HTTPS hostname. Your mail
+stays on your machine and nothing listens on your home network: the tunnel
+dials out. This is what you want for the phone and desktop apps, because a
+custom connector is fetched by the vendor's infrastructure and cannot reach
+a private address.
+
+Install [`cloudflared`](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/)
+and create a named tunnel pointing at the container:
+
+```bash
+cloudflared tunnel login
+cloudflared tunnel create your-mail                        # prints a UUID
+cloudflared tunnel route dns your-mail mail.example.com
+```
+
+A named tunnel takes its origin from a config file, not a flag. Write
+`~/.cloudflared/config.yml`:
+
+```yaml
+tunnel: your-mail
+credentials-file: /home/you/.cloudflared/<UUID>.json
+url: http://localhost:8080
+```
+
+Then run it, and install it as a service so it survives a reboot:
+
+```bash
+cloudflared tunnel run your-mail
+sudo cloudflared service install
+```
+
+Set `PUBLIC_URL` to that hostname and restart, so the OAuth documents
+advertise the address clients actually use:
+
+```bash
+# .env
+PUBLIC_URL=https://mail.example.com
+```
+
+```bash
+docker compose up -d
+```
+
+`PUBLIC_URL` has to match what you type into the client exactly. The
+protected-resource document publishes `PUBLIC_URL + /mcp` as its `resource`,
+and a mismatch there is the most common reason a connector fails to add.
+
+Tailscale Funnel does the same job if you already run Tailscale.
+
+**Claude apps (phone, desktop, web)**
+
+Add a custom connector with the URL `https://mail.example.com/mcp`. The app
+registers itself, opens the consent page, and asks for your passphrase.
+
+**Claude Code**
+
+```bash
+claude mcp add --transport http your-mail https://mail.example.com/mcp
+```
+
+**Codex**
+
+```bash
+codex mcp add your-mail --url https://mail.example.com/mcp
+codex mcp login your-mail
+```
+
+Once traffic flows through the tunnel you can narrow ingress to Anthropic's
+published egress range, `160.79.104.0/21`, at the tunnel or firewall. That
+range is where connector traffic comes from. Do not do this if you also use
+Claude Code or Codex from a laptop on the move, since those connect directly.
+
+---
+
+### Case 3 — on a VPS, reachable from anywhere
+
+Pick this when you want the mirror to stay up without your machine being on.
+It costs about five dollars a month and one real trade-off: a full plaintext
+copy of your mail moves onto a rented disk, with the app passwords in the
+same environment. Read [Security](#security) before you choose it.
+
+These steps are for a fresh Debian or Ubuntu box.
+
+**1. Create a user and lock down SSH.** As root:
+
+```bash
+adduser mail && usermod -aG sudo mail
+rsync --archive --chown=mail:mail ~/.ssh /home/mail
+sed -i 's/^#\?PermitRootLogin.*/PermitRootLogin no/; s/^#\?PasswordAuthentication.*/PasswordAuthentication no/' /etc/ssh/sshd_config
+systemctl restart ssh
+```
+
+**2. Install Docker.** As `mail`:
+
+```bash
+curl -fsSL https://get.docker.com | sudo sh
+sudo usermod -aG docker $USER && newgrp docker
+```
+
+**3. Firewall.** Only SSH and HTTPS:
+
+```bash
+sudo ufw allow OpenSSH && sudo ufw allow 80/tcp && sudo ufw allow 443/tcp
+sudo ufw --force enable
+```
+
+Port 80 is not optional here: Caddy uses it for the certificate challenge and
+to redirect plain HTTP to HTTPS. If you take the tunnel route below instead,
+neither port needs opening.
+
+**4. Get the code and configure it:**
+
+```bash
+git clone https://github.com/wildsurfer/your-mail-mcp.git && cd your-mail-mcp
+cp accounts.example.json accounts.json
+$EDITOR accounts.json .env          # as above, with PUBLIC_URL=https://mail.example.com
+```
+
+**5. Point your domain at the box.** An `A` record for `mail.example.com` to
+the VPS address.
+
+**6. Terminate TLS with Caddy.** Add it beside the server, in a
+`compose.override.yaml`:
+
+```yaml
+services:
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    ports: ["443:443", "80:80"]
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+volumes:
+  caddy_data:
+```
+
+```
+# Caddyfile
+mail.example.com {
+    reverse_proxy your-mail-mcp:8080
+}
+```
+
+Caddy obtains and renews the certificate itself. Then:
+
+```bash
+docker compose up -d
+docker compose logs -f
+```
+
+**7. Connect a client.** Identical to case 2 — the URL is
+`https://mail.example.com/mcp` for the apps, `claude mcp add --transport http`
+for Claude Code, `codex mcp add --url` plus `codex mcp login` for Codex.
+
+If you would rather not open port 443 or own DNS records, run `cloudflared`
+on the VPS exactly as in case 2 and skip steps 3, 5 and 6.
+
+**Keeping it running.** `restart: unless-stopped` in `compose.yaml` brings the
+containers back after a reboot. Check on it with the `folders` tool, which
+reports each account's last sync and last error, or with
+`docker compose logs --tail=50`.
+
+---
 
 ## The accounts file
 
@@ -144,47 +380,7 @@ alone unless you're also changing the matching volume mount or config mount
 in `compose.yaml` — an override that doesn't move the mount with it points
 the server at an empty or missing path.
 
-## Connecting a client
-
-In Claude, add a custom connector with the URL:
-
-```
-https://mail.example.com/mcp
-```
-
-— your `PUBLIC_URL` with `/mcp` appended. The client performs Dynamic Client
-Registration, then opens the consent screen. The consent screen asks for one
-thing: the passphrase you set as `OAUTH_PASSPHRASE`. There is no username and
-no per-account login; one passphrase authorizes the whole server, all
-accounts together. A wrong passphrase is rejected with a one-second delay, to
-slow down guessing.
-
-Once authorized, the client has an access token valid for one hour and a
-refresh token to renew it. Restarting the server drops all issued access
-tokens (they are in memory only); the client gets a 401 and refreshes
-automatically, which is standard OAuth client behavior and needs no action
-from you.
-
-## Deployment examples
-
-`docker compose up -d` runs the container with `compose.yaml`, which binds
-the server to `127.0.0.1:8080` only — it is not reachable from outside the
-host by itself. Something has to sit in front of it and terminate TLS on
-`PUBLIC_URL`.
-
-### Cloudflare Tunnel
-
-Run `cloudflared` on the same host, pointed at `http://localhost:8080`, with
-a public hostname that matches `PUBLIC_URL`. This gives you a public HTTPS
-endpoint over an outbound connection, with no inbound port opened on your
-network. Tailscale Funnel is an equivalent alternative for the same purpose.
-
-Either way, once traffic is flowing through the tunnel you can restrict
-ingress to Anthropic's published egress range, `160.79.104.0/21`, at the
-tunnel or firewall level, since a custom connector is reached from Anthropic's
-infrastructure rather than directly from your device.
-
-### Volumes
+## Volumes and backups
 
 `compose.yaml` mounts `accounts.json` read-only and two named volumes, `mail`
 and `index`, for the maildir and the notmuch database. Back these up if you
@@ -192,7 +388,7 @@ don't want to re-sync from scratch after losing the host; there's nothing in
 them that isn't also on the mail server, but a full mirror re-download of a
 large mailbox takes a while.
 
-### Building a multi-arch image
+## Building a multi-arch image
 
 The image needs to run on both an arm64 Mac mini and an amd64 VPS from the
 same tag. Build and push both platforms with `buildx`:

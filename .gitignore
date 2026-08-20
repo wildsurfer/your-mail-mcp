@@ -2,3 +2,7 @@
 
 # Personal, machine-specific notes. See CLAUDE.md.
 CLAUDE.local.md
+
+# Local configuration and secrets. Never commit these.
+.env
+accounts.json
