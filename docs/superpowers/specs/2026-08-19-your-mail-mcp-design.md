@@ -300,6 +300,15 @@ Requirements taken directly from the documentation, all mandatory:
   exactly as the user enters it, which is what `PUBLIC_URL` is for.
 - Every endpoint answers well inside 10 seconds.
 
+**Client ID Metadata Documents** are accepted alongside DCR: a URL-shaped
+`client_id` is resolved by fetching the document it names, checking the
+document's own `client_id` equals that URL, and using its redirect URIs, with
+nothing persisted. The fetch happens before any authentication, so it runs
+behind an SSRF guard that resolves the host itself, refuses loopback, private,
+link-local and CGNAT addresses, and dials the checked IP directly. Claude
+prefers CIMD over DCR when the metadata advertises it, which keeps the
+registered-client store from growing with every connection.
+
 **Consent** is a single page: one passphrase field checked against
 `OAUTH_PASSPHRASE` in constant time, with a delay after a failed attempt. No
 session, no user table, no cookie. The form posts and the authorization code is

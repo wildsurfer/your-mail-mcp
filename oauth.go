@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
@@ -9,6 +10,8 @@ import (
 	"errors"
 	"fmt"
 	"html/template"
+	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -51,6 +54,11 @@ type oauthServer struct {
 	// of all paying it in parallel.
 	failMu sync.Mutex
 
+	// cimdHTTP fetches Client ID Metadata Documents; see newCIMDClient.
+	// allowPrivateCIMD exists for tests, whose metadata host is loopback.
+	cimdHTTP         *http.Client
+	allowPrivateCIMD bool
+
 	mu    sync.Mutex
 	state oauthState
 
@@ -76,6 +84,7 @@ func newOAuth(statePath, publicURL, passphrase string) (*oauthServer, error) {
 		codes:      map[string]authCode{},
 		access:     map[string]time.Time{},
 	}
+	o.cimdHTTP = newCIMDClient(func() bool { return o.allowPrivateCIMD })
 	raw, err := os.ReadFile(statePath)
 	if err == nil {
 		if err := json.Unmarshal(raw, &o.state); err != nil {
@@ -146,6 +155,95 @@ func (o *oauthServer) registerClient(name string, redirects []string) (string, e
 	id := randomToken()
 	o.state.Clients[id] = &oauthClient{Name: name, RedirectURIs: redirects}
 	return id, o.save()
+}
+
+// cimdHTTP fetches Client ID Metadata Documents. Its dialer resolves the host
+// itself and refuses loopback, private, link-local and CGNAT addresses, then
+// dials the checked IP directly so a DNS answer cannot change between check
+// and connect. The fetch happens before any authentication — anyone can hand
+// /authorize a URL — so without this the endpoint is an open proxy into
+// whatever network the server sits on.
+func newCIMDClient(allowPrivate func() bool) *http.Client {
+	dialer := &net.Dialer{Timeout: 5 * time.Second}
+	return &http.Client{
+		Timeout: 10 * time.Second,
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse // a redirect is a refusal, not a hop
+		},
+		Transport: &http.Transport{
+			DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+				host, port, err := net.SplitHostPort(addr)
+				if err != nil {
+					return nil, err
+				}
+				ips, err := net.DefaultResolver.LookupIP(ctx, "ip", host)
+				if err != nil {
+					return nil, err
+				}
+				ip := ips[0]
+				if !allowPrivate() && isInternalIP(ip) {
+					return nil, fmt.Errorf("refusing to fetch client metadata from internal address %s", ip)
+				}
+				return dialer.DialContext(ctx, network, net.JoinHostPort(ip.String(), port))
+			},
+		},
+	}
+}
+
+var cgnat = func() *net.IPNet { _, n, _ := net.ParseCIDR("100.64.0.0/10"); return n }()
+
+func isInternalIP(ip net.IP) bool {
+	return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() ||
+		ip.IsLinkLocalMulticast() || ip.IsUnspecified() || cgnat.Contains(ip)
+}
+
+// cimdClient resolves a URL-shaped client_id into a client by fetching its
+// metadata document. Nothing is persisted: the binding is that the document's
+// own client_id equals the URL it was fetched from, so the same URL always
+// denotes the same client.
+func (o *oauthServer) cimdClient(ctx context.Context, clientID string) (*oauthClient, error) {
+	u, err := url.Parse(clientID)
+	if err != nil || u.Scheme != "https" || u.Host == "" || u.Fragment != "" {
+		return nil, fmt.Errorf("client_id is neither a registered client nor an https metadata URL")
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, clientID, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Accept", "application/json")
+	resp, err := o.cimdHTTP.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("fetching client metadata: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("client metadata fetch returned %d", resp.StatusCode)
+	}
+	var doc struct {
+		ClientID     string   `json:"client_id"`
+		ClientName   string   `json:"client_name"`
+		RedirectURIs []string `json:"redirect_uris"`
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 64<<10)).Decode(&doc); err != nil {
+		return nil, fmt.Errorf("client metadata: %w", err)
+	}
+	if doc.ClientID != clientID {
+		return nil, fmt.Errorf("client metadata document's client_id does not match the URL it was fetched from")
+	}
+	if len(doc.RedirectURIs) == 0 {
+		return nil, fmt.Errorf("client metadata document lists no redirect URIs")
+	}
+	for _, r := range doc.RedirectURIs {
+		p, err := url.Parse(r)
+		if err != nil || (p.Scheme != "https" && !isLoopback(p)) {
+			return nil, fmt.Errorf("client metadata document contains an invalid redirect URI")
+		}
+	}
+	name := doc.ClientName
+	if name == "" {
+		name = u.Host
+	}
+	return &oauthClient{Name: name, RedirectURIs: doc.RedirectURIs}, nil
 }
 
 func (o *oauthServer) client(id string) *oauthClient {
@@ -262,6 +360,7 @@ func (o *oauthServer) handleASMetadata(w http.ResponseWriter, _ *http.Request) {
 		"grant_types_supported":                 []string{"authorization_code", "refresh_token"},
 		"code_challenge_methods_supported":      []string{"S256"},
 		"token_endpoint_auth_methods_supported": []string{"none"},
+		"client_id_metadata_document_supported": true,
 		"scopes_supported":                      []string{"mail.read"},
 	})
 }
@@ -303,8 +402,15 @@ func (o *oauthServer) handleAuthorize(w http.ResponseWriter, r *http.Request) {
 	// redirect, so failures here render an error page instead.
 	c := o.client(clientID)
 	if c == nil {
-		http.Error(w, "unknown client", http.StatusBadRequest)
-		return
+		// A URL-shaped client_id is a Client ID Metadata Document: the client
+		// is described by a document it hosts, and nothing is registered here.
+		var err error
+		c, err = o.cimdClient(r.Context(), clientID)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "oauth: client metadata for %q: %v\n", clientID, err)
+			http.Error(w, "unknown client", http.StatusBadRequest)
+			return
+		}
 	}
 	if !redirectAllowed(c.RedirectURIs, redirect) {
 		http.Error(w, "redirect_uri does not match this client's registration", http.StatusBadRequest)

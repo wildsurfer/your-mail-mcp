@@ -1,7 +1,9 @@
 package main
 
 import (
+	"context"
 	"crypto/sha256"
+	"crypto/tls"
 	"encoding/base64"
 	"encoding/json"
 	"io"
@@ -872,5 +874,123 @@ func TestTokenRefreshFailsClosedWhenPersistFails(t *testing.T) {
 	})
 	if status != http.StatusOK {
 		t.Errorf("the old refresh token did not survive a failed persist: status %d, %v", status, out)
+	}
+}
+
+// cimdHost serves a metadata document whose client_id is its own URL, the
+// binding CIMD depends on. Returned URL is the client_id to present.
+func cimdHost(t *testing.T, name string, redirects []string) string {
+	t.Helper()
+	var ts *httptest.Server
+	ts = httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"client_id":     ts.URL + "/meta.json",
+			"client_name":   name,
+			"redirect_uris": redirects,
+		})
+	}))
+	t.Cleanup(ts.Close)
+	return ts.URL + "/meta.json"
+}
+
+func TestASMetadataAdvertisesCIMD(t *testing.T) {
+	o := testOAuth(t)
+	rec := httptest.NewRecorder()
+	o.handleASMetadata(rec, httptest.NewRequest(http.MethodGet, "/.well-known/oauth-authorization-server", nil))
+	var doc struct {
+		CIMD bool     `json:"client_id_metadata_document_supported"`
+		Auth []string `json:"token_endpoint_auth_methods_supported"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &doc); err != nil {
+		t.Fatal(err)
+	}
+	// Claude selects CIMD only when both of these hold.
+	if !doc.CIMD {
+		t.Error("client_id_metadata_document_supported must be true")
+	}
+	if !containsString(doc.Auth, "none") {
+		t.Error("token_endpoint_auth_methods_supported must include none")
+	}
+}
+
+func TestCIMDFullFlow(t *testing.T) {
+	o := testOAuth(t)
+	o.failDelay = 0
+	o.allowPrivateCIMD = true // the metadata host below is loopback
+	o.cimdHTTP.Transport.(*http.Transport).TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
+	clientID := cimdHost(t, "CIMD Test Client", []string{"https://claude.ai/api/mcp/auth_callback"})
+
+	// consent page renders with the fetched client name
+	q := url.Values{
+		"response_type": {"code"}, "client_id": {clientID},
+		"redirect_uri":          {"https://claude.ai/api/mcp/auth_callback"},
+		"code_challenge":        {challengeFor(verifier)},
+		"code_challenge_method": {"S256"},
+	}
+	rec := httptest.NewRecorder()
+	o.handleAuthorize(rec, httptest.NewRequest(http.MethodGet, "/authorize?"+q.Encode(), nil))
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "CIMD Test Client") {
+		t.Fatalf("consent page: status %d, name shown: %v", rec.Code, strings.Contains(rec.Body.String(), "CIMD Test Client"))
+	}
+
+	// passphrase yields a code, and the code exchanges with the URL client_id
+	q.Set("passphrase", "hunter2")
+	req := httptest.NewRequest(http.MethodPost, "/authorize", strings.NewReader(q.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rec = httptest.NewRecorder()
+	o.handleAuthorize(rec, req)
+	if rec.Code != http.StatusFound {
+		t.Fatalf("authorize status = %d", rec.Code)
+	}
+	loc, _ := url.Parse(rec.Header().Get("Location"))
+	status, out := postToken(t, o, url.Values{
+		"grant_type": {"authorization_code"}, "code": {loc.Query().Get("code")},
+		"client_id":     {clientID},
+		"redirect_uri":  {"https://claude.ai/api/mcp/auth_callback"},
+		"code_verifier": {verifier},
+	})
+	if status != http.StatusOK {
+		t.Fatalf("token exchange with a CIMD client_id failed: %d %v", status, out)
+	}
+	// and nothing was persisted: CIMD's point is no registration
+	if o.client(clientID) != nil {
+		t.Error("a CIMD client must not be stored in the registration map")
+	}
+}
+
+func TestCIMDRejectsMismatchedBinding(t *testing.T) {
+	o := testOAuth(t)
+	o.allowPrivateCIMD = true
+	o.cimdHTTP.Transport.(*http.Transport).TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
+	// document claims a different client_id than the URL it lives at
+	ts := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"client_id":     "https://evil.example.com/meta.json",
+			"redirect_uris": []string{"https://claude.ai/api/mcp/auth_callback"},
+		})
+	}))
+	defer ts.Close()
+	if _, err := o.cimdClient(context.Background(), ts.URL+"/meta.json"); err == nil {
+		t.Fatal("a document whose client_id differs from its URL must be rejected")
+	}
+}
+
+func TestCIMDRefusesInternalAddressesByDefault(t *testing.T) {
+	o := testOAuth(t) // allowPrivateCIMD stays false: the shipped configuration
+	ts := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Error("the SSRF guard let a request through to a loopback address")
+	}))
+	defer ts.Close()
+	if _, err := o.cimdClient(context.Background(), ts.URL+"/meta.json"); err == nil {
+		t.Fatal("fetching client metadata from a loopback address must be refused")
+	}
+}
+
+func TestCIMDRejectsNonURLClientIDs(t *testing.T) {
+	o := testOAuth(t)
+	for _, id := range []string{"just-an-id", "http://plain.example.com/meta.json", "https://host/meta.json#frag"} {
+		if _, err := o.cimdClient(context.Background(), id); err == nil {
+			t.Errorf("cimdClient(%q) should have been rejected", id)
+		}
 	}
 }
