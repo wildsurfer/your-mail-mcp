@@ -27,6 +27,56 @@ const htmlOnlyFixture = "From: newsletter@example.com\r\n" +
 	"\r\n" +
 	"<html><body><table><tr><td><b>Meeting moved</b> to 3pm=\r\n on Thursday.</td></tr></table><a href=3D\"http://example.com/x\">details</a></body></html>\r\n"
 
+// plainBracketsFixture is an ordinary plain-text message whose body itself
+// contains angle brackets, an address, and a bracketed URL — the case N3
+// covers, where the fixed pipe through an HTML renderer treated all of it
+// as markup.
+const plainBracketsFixture = "From: Alice Example <alice@example.com>\r\n" +
+	"To: me@work\r\n" +
+	"Subject: brackets\r\n" +
+	"Message-ID: <plain1@example.com>\r\n" +
+	"Date: Tue, 18 Aug 2026 10:00:00 +0000\r\n" +
+	"\r\n" +
+	"if a < b then print <b>x</b>\r\n" +
+	"see <https://example.com/path> for detail\r\n" +
+	"AT&T and R&D\r\n"
+
+// alternativeFixture is a multipart/alternative message with distinct
+// plain and HTML renditions, covering N6: text must return PLAINVERSION
+// once, not PLAINVERSION followed by the w3m rendering of HTMLVERSION.
+const alternativeFixture = "From: alice@example.com\r\n" +
+	"To: me@work\r\n" +
+	"Subject: alt\r\n" +
+	"Message-ID: <alt1@example.com>\r\n" +
+	"Date: Tue, 18 Aug 2026 10:00:00 +0000\r\n" +
+	"MIME-Version: 1.0\r\n" +
+	"Content-Type: multipart/alternative; boundary=\"BOUND\"\r\n" +
+	"\r\n" +
+	"--BOUND\r\n" +
+	"Content-Type: text/plain; charset=utf-8\r\n" +
+	"\r\n" +
+	"PLAINVERSION\r\n" +
+	"--BOUND\r\n" +
+	"Content-Type: text/html; charset=utf-8\r\n" +
+	"\r\n" +
+	"<html><body>HTMLVERSION</body></html>\r\n" +
+	"--BOUND--\r\n"
+
+// cyrillicFixture covers N2: w3m 0.5.3 in the shipped debian:bookworm-slim
+// image has no UTF-8 locale and defaults its output charset to ASCII,
+// replacing every non-ASCII character with "?". This message has no
+// text/plain part, so text always goes through w3m regardless of the N3
+// fix above.
+const cyrillicFixture = "From: newsletter@example.com\r\n" +
+	"To: me@work\r\n" +
+	"Subject: cyrillic\r\n" +
+	"Message-ID: <cyr1@example.com>\r\n" +
+	"Date: Tue, 18 Aug 2026 10:00:00 +0000\r\n" +
+	"MIME-Version: 1.0\r\n" +
+	"Content-Type: text/html; charset=utf-8\r\n" +
+	"\r\n" +
+	"<html><body>Привіт, Ivan — café naïve</body></html>\r\n"
+
 // threadGoodFixture and threadJunkReplyFixture form a two-message thread: a
 // clean inbox message and a Spam-foldered reply to it.
 const threadGoodFixture = "From: alice@example.com\r\nTo: me@work\r\nSubject: project update\r\n" +
@@ -387,6 +437,71 @@ func TestTextToolConvertsHTMLMail(t *testing.T) {
 	}
 	if strings.Contains(body, "=3D") {
 		t.Errorf("text leaked a quoted-printable escape: %s", body)
+	}
+}
+
+// TestTextToolPreservesPlainTextMessage covers N3: piping notmuch's whole
+// --format=text envelope through w3m unconditionally treated angle-bracketed
+// content in plain-text mail as markup, dropping the sender's address, a
+// bracketed URL, and an inline <b> tag, and collapsed the whole message
+// (headers and body) onto one line.
+func TestTextToolPreservesPlainTextMessage(t *testing.T) {
+	maildir, _, config := newFixture(t, map[string][]string{"work/INBOX": {plainBracketsFixture}})
+	s := newServer(&Config{Accounts: []Account{{Name: "work"}}}, newNotmuch(config), maildir)
+
+	res, _, err := s.textTool(context.Background(), nil, idArgs{ID: "plain1@example.com"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := resultText(t, res)
+	for _, want := range []string{"alice@example.com", "<b>x</b>", "<https://example.com/path>", "AT&T"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("text lost %q from a plain-text message:\n%s", want, body)
+		}
+	}
+	if strings.Count(body, "\n") < 3 {
+		t.Errorf("text collapsed a plain-text message's line breaks onto one line:\n%s", body)
+	}
+}
+
+// TestTextToolReturnsAlternativeBodyOnce covers N6: --include-html on a
+// --format=text show includes every part of a multipart/alternative
+// message, so text returned the text/plain rendition followed by the w3m
+// rendering of the text/html rendition — the same content twice.
+func TestTextToolReturnsAlternativeBodyOnce(t *testing.T) {
+	maildir, _, config := newFixture(t, map[string][]string{"work/INBOX": {alternativeFixture}})
+	s := newServer(&Config{Accounts: []Account{{Name: "work"}}}, newNotmuch(config), maildir)
+
+	res, _, err := s.textTool(context.Background(), nil, idArgs{ID: "alt1@example.com"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := resultText(t, res)
+	if !strings.Contains(body, "PLAINVERSION") {
+		t.Errorf("text is missing the plain rendition: %s", body)
+	}
+	if strings.Contains(body, "HTMLVERSION") {
+		t.Errorf("text returned the html rendition too, doubling the content: %s", body)
+	}
+}
+
+// TestTextToolHandlesUTF8 covers N2: w3m 0.5.3 in the shipped
+// debian:bookworm-slim image has no UTF-8 locale and defaults its output
+// charset to ASCII, replacing every non-ASCII character with "?". The host
+// w3m (0.5.6) defaults to UTF-8 already, so this passes here either way;
+// see the report for the container reproduction that actually exercises the
+// -I/-O UTF-8 flags this test cannot distinguish on its own.
+func TestTextToolHandlesUTF8(t *testing.T) {
+	maildir, _, config := newFixture(t, map[string][]string{"work/INBOX": {cyrillicFixture}})
+	s := newServer(&Config{Accounts: []Account{{Name: "work"}}}, newNotmuch(config), maildir)
+
+	res, _, err := s.textTool(context.Background(), nil, idArgs{ID: "cyr1@example.com"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := resultText(t, res)
+	if !strings.Contains(body, "Привіт") || !strings.Contains(body, "café") || !strings.Contains(body, "naïve") {
+		t.Errorf("text mangled non-ASCII content: %s", body)
 	}
 }
 

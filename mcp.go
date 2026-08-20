@@ -355,10 +355,15 @@ func (s *Server) threadTool(ctx context.Context, _ *mcp.CallToolRequest, a idArg
 }
 
 // textTool returns a readable body. notmuch decodes the MIME structure
-// (quoted-printable, base64, charset) and includes the HTML part even for an
-// HTML-only message; w3m then renders that HTML down to plain text. If w3m
-// is missing or fails, notmuch's own text rendering is used instead, so the
-// tool degrades rather than erroring.
+// (quoted-printable, base64, charset). A message with no text/plain part
+// (HTML-only mail) is rendered down to plain text through w3m; everything
+// else — plain-text mail, and the plain alternative of a multipart/
+// alternative message — is returned as notmuch already decoded it, since
+// piping it through an HTML renderer would strip addresses, bracketed URLs
+// and line breaks (it treats angle brackets as markup) and, for
+// multipart/alternative, hand back the html rendition a second time on top
+// of the plain one. If w3m is missing or fails, notmuch's own text
+// rendering is used instead, so the tool degrades rather than erroring.
 func (s *Server) textTool(ctx context.Context, _ *mcp.CallToolRequest, a idArgs) (*mcp.CallToolResult, any, error) {
 	q, err := messageQuery(a.ID)
 	if err != nil {
@@ -368,12 +373,28 @@ func (s *Server) textTool(ctx context.Context, _ *mcp.CallToolRequest, a idArgs)
 	if err != nil {
 		return nil, nil, err
 	}
+	if strings.Contains(string(raw), "Content-type: text/plain") {
+		// A text/plain part exists. --include-html is dropped here: without
+		// it notmuch omits an html-only part's content but still includes
+		// text/plain either way (see showTool), so this yields the plain
+		// body alone, without a second html rendition alongside it.
+		out, err := s.nm.run(ctx, "show", "--format=text", "--body=true", q)
+		if err != nil {
+			return nil, nil, err
+		}
+		return s.page(string(out), a), nil, nil
+	}
 	// -cols: w3m's default dump width is a terminal-sized ~80 columns, which
 	// hard-wraps ordinary prose mid-sentence for a reader that has no
 	// terminal. 2000 is comfortably below the width where very large values
 	// trigger w3m's own column-wrapping bug, and large enough that only a
 	// genuinely long line wraps.
-	cmd := exec.CommandContext(ctx, "w3m", "-dump", "-cols", "2000", "-T", "text/html")
+	// -I/-O UTF-8: the container's w3m has no UTF-8 locale available and
+	// otherwise defaults its output charset to ASCII, replacing every
+	// non-ASCII character with "?". notmuch has already decoded the part to
+	// UTF-8, so both the assumed input charset and the output charset are
+	// pinned here rather than left to locale detection.
+	cmd := exec.CommandContext(ctx, "w3m", "-dump", "-cols", "2000", "-I", "UTF-8", "-O", "UTF-8", "-T", "text/html")
 	cmd.Env = []string{} // w3m is a pure filter here; it needs nothing from the process environment
 	cmd.Stdin = strings.NewReader(string(raw))
 	out, wErr := cmd.Output()
