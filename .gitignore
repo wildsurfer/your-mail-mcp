@@ -9,3 +9,6 @@ CLAUDE.local.md
 
 # Local tool configuration, not repo content.
 /.claude/
+
+# Machine-specific deployment config. Never commit.
+/compose.override.yaml

@@ -210,9 +210,17 @@ locales.
 
 At startup, and per account, the server issues one IMAP `LIST` and reads the
 RFC 6154 attributes, caching which mailbox is `\Junk` and which is `\Trash`
-whatever its display name. Gmail and iCloud both advertise these. Servers that do
-not fall back to a built-in list of common English spellings, and past that to the
-account's `exclude_folders`.
+whatever its display name. The request retries as a plain `LIST` when the
+extended `RETURN (SPECIAL-USE)` form is rejected — iCloud advertises the
+capability and then refuses that syntax with a parse error, while its plain
+`LIST` still carries the attributes.
+
+A configured `exclude_folders` wins outright. Otherwise the exclusion set is
+the union of the advertised attributes and the built-in list of common
+English folder names, deduplicated. The tiers were originally exclusive, and
+live iCloud showed why that loses mail it should not: its `LIST` marks only
+`\Trash`, so a one-entry attribute list won its tier and the folder named
+Junk stayed searchable.
 
 Each mailbox name is translated from the server's own hierarchy delimiter —
 which the `LIST` response for that mailbox carries, and which is server- and
