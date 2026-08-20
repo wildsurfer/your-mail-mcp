@@ -1,7 +1,6 @@
 services:
   your-mail-mcp:
     image: ghcr.io/wildsurfer/your-mail-mcp:latest
-    build: .
     restart: unless-stopped
     ports:
       - "127.0.0.1:8080:8080"

@@ -66,6 +66,7 @@ without changing the spec first.
 | `notmuch.go` | executing notmuch, query validation, account scoping |
 | `sync.go` | generated configs, mbsync, sync mutex, guards, SPECIAL-USE discovery |
 | `oauth.go` | authorization-server endpoints and the client/token store |
+| `.github/workflows/ci.yaml` | vet, unit and live tests on every PR; multi-arch image to GHCR on main and tags; release binaries on tags |
 | `docs/superpowers/specs/` | the design spec, which is the binding authority |
 | `docs/reviews/` | what was verified against the real toolchain, and what was not |
 | `docs/research/` | the survey and provider research the design rests on |

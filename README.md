@@ -66,14 +66,20 @@ deliberately separate so you can get the thing working first.
 | **2** | your machine | you, from anywhere | your machine |
 | **3** | a VPS | you, from anywhere | a rented disk |
 
-Every case starts the same way:
+The server ships as a container image at
+`ghcr.io/wildsurfer/your-mail-mcp`, built and published by CI for amd64 and
+arm64. Nothing needs compiling, and every case starts the same way — two
+files in an empty directory:
 
 ```bash
-cp accounts.example.json accounts.json
+mkdir your-mail && cd your-mail
+curl -fsSLO https://raw.githubusercontent.com/wildsurfer/your-mail-mcp/main/compose.yaml
+curl -fsSL https://raw.githubusercontent.com/wildsurfer/your-mail-mcp/main/accounts.example.json -o accounts.json
 ```
 
-Edit it with your accounts (see [The accounts file](#the-accounts-file)), then
-put the secrets it references in a `.env` file next to `compose.yaml`:
+Edit `accounts.json` with your accounts (see
+[The accounts file](#the-accounts-file)), then put the secrets it references
+in a `.env` file next to `compose.yaml`:
 
 ```bash
 # .env
@@ -308,9 +314,10 @@ On a fresh Debian or Ubuntu box:
 curl -fsSL https://get.docker.com | sudo sh
 sudo usermod -aG docker $USER && newgrp docker
 
-# 2. This repo, and your accounts
-git clone https://github.com/wildsurfer/your-mail-mcp.git && cd your-mail-mcp
-cp accounts.example.json accounts.json
+# 2. The two files, and your accounts
+mkdir your-mail && cd your-mail
+curl -fsSLO https://raw.githubusercontent.com/wildsurfer/your-mail-mcp/main/compose.yaml
+curl -fsSL https://raw.githubusercontent.com/wildsurfer/your-mail-mcp/main/accounts.example.json -o accounts.json
 $EDITOR accounts.json             # your accounts
 $EDITOR .env                      # OAUTH_PASSPHRASE and the account passwords
 
@@ -480,14 +487,32 @@ alone unless you're also changing the matching volume mount or config mount
 in `compose.yaml` — an override that doesn't move the mount with it points
 the server at an empty or missing path.
 
-## Building a multi-arch image
+## Without Docker
 
-The image needs to run on both an arm64 Mac mini and an amd64 VPS from the
-same tag. Build and push both platforms with `buildx`:
+Release binaries for Linux and macOS, amd64 and arm64, are on the
+[releases page](https://github.com/wildsurfer/your-mail-mcp/releases), with
+checksums. The binary shells out to `mbsync`, `notmuch` and `w3m`, so install
+those first — `brew install isync notmuch w3m` on macOS,
+`apt install isync notmuch w3m` on Debian and Ubuntu. isync 1.4.4 or newer
+works.
+
+Then the same configuration as the container, with paths of your choosing:
 
 ```bash
-docker buildx build --platform linux/amd64,linux/arm64 -t ghcr.io/wildsurfer/your-mail-mcp:latest --push .
+CONFIG=./accounts.json MAILDIR=./mail INDEX=./index \
+PUBLIC_URL=http://127.0.0.1:8080 OAUTH_PASSPHRASE=... \
+WORK_PASS=... ./your-mail-mcp
 ```
+
+Windows is not supported: the maildir handling leans on Unix filesystem
+semantics, and there is no mbsync to shell out to.
+
+## Building it yourself
+
+CI builds, tests and publishes every image, so nobody has to — but it is one
+command if you want to: `docker build -t your-mail-mcp .` for the container,
+or `go build` for the binary (Go 1.27, with the three tools above on PATH for
+the tests).
 
 ## Provider notes
 
