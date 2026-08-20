@@ -61,10 +61,12 @@ mailbox and never fetches a message.
 
 There is no send, no delete, no move, and no tag. Attachments are listed in
 `show` and `thread` and served read-only by the `attachment` tool, one part at
-a time, capped at 5MB. Nothing in the process holds write access to any
-account.
+a time, capped at 5MB. Bigger parts are served raw at
+`GET /attachment/{id}/{part}`, authenticated by a bearer token or by the
+short-lived signed link the tool returns when it refuses an oversized part.
+Nothing in the process holds write access to any account.
 
-Nine tools, all read-only:
+Ten tools, all read-only:
 
 | Tool | What it does |
 |---|---|
@@ -77,7 +79,7 @@ Nine tools, all read-only:
 | `text` | Return the plain-text body of one message, converting HTML. |
 | `folders` | List accounts, their folders, index tags, and each account's last sync and last error. |
 | `refresh` | Sync INBOX now and report how many messages arrived. |
-| `attachment` | One attachment or MIME part of a message, by part number from `show`. Images and binaries as typed content, text as a marked block, 5MB cap. |
+| `attachment` | One attachment or MIME part of a message, by part number from `show`. Images and binaries as typed content, text as a marked block. Parts over 5MB get a signed download link instead. |
 
 `search`, `ids`, `files` and `count` take a notmuch query (`from:`, `to:`,
 `subject:`, `tag:`, `folder:`, `date:2026-01-01..2026-06-30`, combined with

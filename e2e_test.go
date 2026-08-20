@@ -34,7 +34,7 @@ func TestEndToEndRegisterAuthorizeTokenCall(t *testing.T) {
 	ts := httptest.NewServer(http.NotFoundHandler())
 	defer ts.Close()
 	o.publicURL = ts.URL
-	ts.Config.Handler = newHTTPHandler(o, m)
+	ts.Config.Handler = newHTTPHandler(o, m, srv)
 
 	client := ts.Client()
 	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }

@@ -10,6 +10,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -301,6 +302,7 @@ func run() error {
 	syncer.timeout = e.SyncTimeout
 
 	srv := newServer(cfg, nm, e.Maildir)
+	srv.publicURL = strings.TrimSuffix(e.PublicURL, "/")
 	srv.sync = syncer.Sync
 	srv.status = syncer.Status
 
@@ -348,7 +350,7 @@ func run() error {
 
 	httpSrv := &http.Server{
 		Addr:              e.ListenAddr,
-		Handler:           newHTTPHandler(o, m),
+		Handler:           newHTTPHandler(o, m, srv),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 	go func() {
@@ -368,10 +370,14 @@ func run() error {
 // resource_metadata pointer: Claude does not honour that header on a 200, and
 // without it the client has to probe for the metadata, which costs round trips
 // and fails outright on hosts that do not serve /.well-known paths.
+func bearerOK(o *oauthServer, r *http.Request) bool {
+	token := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+	return token != "" && token != r.Header.Get("Authorization") && o.validAccessToken(token)
+}
+
 func requireBearer(o *oauthServer, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		token := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
-		if token == "" || token == r.Header.Get("Authorization") || !o.validAccessToken(token) {
+		if !bearerOK(o, r) {
 			w.Header().Set("WWW-Authenticate",
 				fmt.Sprintf("Bearer resource_metadata=%q", o.publicURL+"/.well-known/oauth-protected-resource/mcp"))
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
@@ -381,7 +387,7 @@ func requireBearer(o *oauthServer, next http.Handler) http.Handler {
 	})
 }
 
-func newHTTPHandler(o *oauthServer, m *mcp.Server) http.Handler {
+func newHTTPHandler(o *oauthServer, m *mcp.Server, srv *Server) http.Handler {
 	mux := http.NewServeMux()
 	// Discovery. Both documents are unauthenticated by necessity: a client
 	// has to read them before it can obtain a token, and they carry only
@@ -402,5 +408,22 @@ func newHTTPHandler(o *oauthServer, m *mcp.Server) http.Handler {
 
 	streamable := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return m }, nil)
 	mux.Handle("/mcp", requireBearer(o, streamable))
+	// Raw attachment bytes for anything too big for a tool response. A
+	// bearer token works for scripted callers; a signed link works in a
+	// plain browser (the attachment tool hands one out when it refuses an
+	// oversized part).
+	mux.HandleFunc("GET /attachment/{id}/{part}", func(w http.ResponseWriter, r *http.Request) {
+		id := r.PathValue("id")
+		part, err := strconv.Atoi(r.PathValue("part"))
+		if err != nil {
+			http.Error(w, "bad part", http.StatusBadRequest)
+			return
+		}
+		if !srv.validAttachmentSig(r, id, part) && !bearerOK(o, r) {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		srv.serveAttachment(w, r, id, part)
+	})
 	return mux
 }

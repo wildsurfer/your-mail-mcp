@@ -5,6 +5,8 @@ import (
 	"context"
 	"encoding/base64"
 	"errors"
+	"net/http/httptest"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -891,5 +893,69 @@ func TestAttachmentRejectsBadParts(t *testing.T) {
 	}
 	if _, _, err := s.attachmentTool(context.Background(), nil, attachmentArgs{ID: `x" or path:**`, Part: 1}); err == nil {
 		t.Error("injection in id must be rejected")
+	}
+}
+
+func TestAttachmentSignedLink(t *testing.T) {
+	s := attachmentFixture(t)
+	s.publicURL = "https://example.test"
+
+	link := s.attachmentURL("msg@example.com", 3)
+	u, err := url.Parse(link)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest("GET", link, nil)
+	if !s.validAttachmentSig(req, "msg@example.com", 3) {
+		t.Error("fresh link rejected")
+	}
+	if s.validAttachmentSig(req, "msg@example.com", 2) {
+		t.Error("signature accepted for a different part")
+	}
+	if s.validAttachmentSig(req, "other@example.com", 3) {
+		t.Error("signature accepted for a different message")
+	}
+	exp := u.Query().Get("exp")
+	stale := httptest.NewRequest("GET", "https://example.test/attachment/msg@example.com/3?exp=1&sig="+
+		s.attachmentSig("msg@example.com", 3, 1), nil)
+	_ = exp
+	if s.validAttachmentSig(stale, "msg@example.com", 3) {
+		t.Error("expired link accepted")
+	}
+}
+
+func TestServeAttachmentStreamsRawBytes(t *testing.T) {
+	s := attachmentFixture(t)
+	ids, err := s.nm.run(context.Background(), "search", "--output=messages", "*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := strings.TrimPrefix(strings.TrimSpace(string(ids)), "id:")
+
+	rec := httptest.NewRecorder()
+	s.serveAttachment(rec, httptest.NewRequest("GET", "/attachment/x/3", nil), id, 3)
+	if rec.Code != 200 {
+		t.Fatalf("status = %d, body %q", rec.Code, rec.Body.String())
+	}
+	want, _ := base64.StdEncoding.DecodeString(tinyPNG)
+	if !bytes.Equal(rec.Body.Bytes(), want) {
+		t.Errorf("body differs from the attachment bytes")
+	}
+	if ct := rec.Header().Get("Content-Type"); ct != "image/png" {
+		t.Errorf("Content-Type = %q", ct)
+	}
+	if cd := rec.Header().Get("Content-Disposition"); !strings.Contains(cd, "dot.png") {
+		t.Errorf("Content-Disposition = %q", cd)
+	}
+
+	rec = httptest.NewRecorder()
+	s.serveAttachment(rec, httptest.NewRequest("GET", "/attachment/x/9", nil), id, 9)
+	if rec.Code != 404 {
+		t.Errorf("missing part status = %d", rec.Code)
+	}
+	rec = httptest.NewRecorder()
+	s.serveAttachment(rec, httptest.NewRequest("GET", "/attachment/x/1", nil), `x" or path:**`, 1)
+	if rec.Code != 400 {
+		t.Errorf("injection id status = %d", rec.Code)
 	}
 }

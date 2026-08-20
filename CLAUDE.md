@@ -35,7 +35,10 @@ without changing the spec first.
   attachment parts: text cannot mark pixels, so the `attachment` tool returns
   images and binaries as typed MCP content whose schema names them
   attacker-authored, capped at 5MB. Text parts, text attachments included,
-  still pass through `render`.
+  still pass through `render`. Parts over the cap are served raw at
+  `GET /attachment/{id}/{part}` (bearer token or 15-minute signed link):
+  those bytes go to a shell or a browser, never into model context, so no
+  cap and no `render` apply there.
 - **Junk and trash are excluded from search by default**, discovered per account
   through RFC 6154 SPECIAL-USE so it works whatever the folders are named and in
   whatever language.

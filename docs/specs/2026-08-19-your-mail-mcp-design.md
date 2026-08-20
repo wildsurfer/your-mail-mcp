@@ -303,6 +303,13 @@ parts, which cannot carry the text markers, return as typed image or blob
 content whose tool schema names them attacker-authored data. Text parts pass
 through `render` like all other mail text.
 
+Parts over the cap cannot travel through model context at all, so the server
+also serves raw attachment bytes at `GET /attachment/{id}/{part}`, outside
+the MCP content path. The endpoint accepts a bearer token, or an HMAC-signed
+link scoped to exactly one part and valid for 15 minutes, which the
+`attachment` tool returns in place of an oversized part. The signing key is
+generated per process; a restart invalidates outstanding links.
+
 ## 4. Authentication
 
 Claude's connector documentation makes OAuth 2.0 with Dynamic Client Registration

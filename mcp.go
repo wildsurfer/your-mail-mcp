@@ -2,15 +2,23 @@ package main
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
+	"mime"
+	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -73,6 +81,11 @@ type Server struct {
 	nm      *Notmuch
 	maildir string
 
+	// publicURL prefixes signed attachment links; set from PUBLIC_URL in
+	// run(). attachKey signs them.
+	publicURL string
+	attachKey []byte
+
 	// excluded maps account name to notmuch folder paths kept out of search by
 	// default. Populated by SPECIAL-USE discovery; empty until then, which
 	// simply means nothing is excluded. Refreshed periodically after startup
@@ -91,13 +104,20 @@ type Server struct {
 }
 
 func newServer(cfg *Config, nm *Notmuch, maildir string) *Server {
+	// Per-process key for signed attachment links. A restart invalidates
+	// outstanding links, which is fine at a 15-minute TTL.
+	key := make([]byte, 32)
+	if _, err := rand.Read(key); err != nil {
+		panic(err) // the OS entropy source is gone; nothing sensible to do
+	}
 	return &Server{
-		cfg:      cfg,
-		nm:       nm,
-		maildir:  maildir,
-		excluded: map[string][]string{},
-		status:   func() map[string]AccountStatus { return map[string]AccountStatus{} },
-		sync:     func(context.Context, string, string) (int, error) { return 0, nil },
+		attachKey: key,
+		cfg:       cfg,
+		nm:        nm,
+		maildir:   maildir,
+		excluded:  map[string][]string{},
+		status:    func() map[string]AccountStatus { return map[string]AccountStatus{} },
+		sync:      func(context.Context, string, string) (int, error) { return 0, nil },
 	}
 }
 
@@ -260,7 +280,7 @@ func (s *Server) attachmentTool(ctx context.Context, _ *mcp.CallToolRequest, a a
 	if err != nil {
 		return nil, nil, err
 	}
-	ctype := partContentType(meta, a.Part)
+	ctype, _ := partContentType(meta, a.Part)
 	if ctype == "" {
 		return nil, nil, fmt.Errorf("message has no part %d; part numbers are in show's output", a.Part)
 	}
@@ -269,7 +289,9 @@ func (s *Server) attachmentTool(ctx context.Context, _ *mcp.CallToolRequest, a a
 		return nil, nil, err
 	}
 	if len(raw) > attachmentCap {
-		return nil, nil, fmt.Errorf("part %d is %d bytes, over the %d byte limit for a single tool response", a.Part, len(raw), attachmentCap)
+		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: fmt.Sprintf(
+			"Part %d is %d bytes, over the %d byte limit for a single tool response. Download it directly (link valid %d minutes):\n%s",
+			a.Part, len(raw), attachmentCap, int(attachmentLinkTTL.Minutes()), s.attachmentURL(a.ID, a.Part))}}}, nil, nil
 	}
 	switch {
 	case strings.HasPrefix(ctype, "image/"):
@@ -287,34 +309,100 @@ func (s *Server) attachmentTool(ctx context.Context, _ *mcp.CallToolRequest, a a
 	}
 }
 
+// attachmentLinkTTL bounds a signed attachment link. Long enough to click,
+// short enough that a leaked link goes stale within the hour.
+const attachmentLinkTTL = 15 * time.Minute
+
+// attachmentSig signs one (id, part, expiry) triple. The raw endpoint accepts
+// the signature in place of a bearer token, so a link can be opened in a
+// plain browser; HMAC over the exact triple means a link grants exactly one
+// part until exactly one moment, nothing else.
+func (s *Server) attachmentSig(id string, part int, exp int64) string {
+	mac := hmac.New(sha256.New, s.attachKey)
+	fmt.Fprintf(mac, "%s\x00%d\x00%d", id, part, exp)
+	return base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
+}
+
+func (s *Server) attachmentURL(id string, part int) string {
+	exp := time.Now().Add(attachmentLinkTTL).Unix()
+	return fmt.Sprintf("%s/attachment/%s/%d?exp=%d&sig=%s",
+		s.publicURL, url.PathEscape(id), part, exp, s.attachmentSig(id, part, exp))
+}
+
+// validAttachmentSig reports whether the request carries a live signature for
+// the id and part in its path.
+func (s *Server) validAttachmentSig(r *http.Request, id string, part int) bool {
+	exp, err := strconv.ParseInt(r.URL.Query().Get("exp"), 10, 64)
+	if err != nil || time.Now().Unix() > exp {
+		return false
+	}
+	want := s.attachmentSig(id, part, exp)
+	return hmac.Equal([]byte(want), []byte(r.URL.Query().Get("sig")))
+}
+
+// serveAttachment streams one MIME part's raw bytes over plain HTTP, outside
+// the MCP content path: these bytes go to a shell or a browser, never into
+// model context, which is why no size cap applies. Auth happens in the mux
+// wrapper (bearer or signed link), never here.
+func (s *Server) serveAttachment(w http.ResponseWriter, r *http.Request, id string, part int) {
+	q, err := messageQuery(id)
+	if err != nil || part < 1 {
+		http.Error(w, "bad id or part", http.StatusBadRequest)
+		return
+	}
+	meta, err := s.nm.run(r.Context(), "show", "--format=json", "--body=true", "--entire-thread=false", q)
+	if err != nil {
+		http.Error(w, "lookup failed", http.StatusInternalServerError)
+		return
+	}
+	ctype, filename := partContentType(meta, part)
+	if ctype == "" {
+		http.Error(w, "no such message or part", http.StatusNotFound)
+		return
+	}
+	raw, err := s.nm.run(r.Context(), "show", fmt.Sprintf("--part=%d", part), "--format=raw", q)
+	if err != nil {
+		http.Error(w, "extract failed", http.StatusInternalServerError)
+		return
+	}
+	if filename == "" {
+		filename = fmt.Sprintf("part-%d", part)
+	}
+	w.Header().Set("Content-Type", ctype)
+	w.Header().Set("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": filename}))
+	w.Header().Set("Content-Length", strconv.Itoa(len(raw)))
+	_, _ = w.Write(raw)
+}
+
 // partContentType walks show's JSON for the content type of one part id.
-func partContentType(showJSON []byte, part int) string {
-	var walk func(v any) string
-	walk = func(v any) string {
+func partContentType(showJSON []byte, part int) (ctype, filename string) {
+	var walk func(v any) (string, string)
+	walk = func(v any) (string, string) {
 		switch t := v.(type) {
 		case map[string]any:
 			if id, ok := t["id"].(float64); ok && int(id) == part {
 				if ct, ok := t["content-type"].(string); ok {
-					return ct
+					name, _ := t["filename"].(string)
+					return ct, name
 				}
 			}
 			for _, sub := range t {
-				if got := walk(sub); got != "" {
-					return got
+				if ct, name := walk(sub); ct != "" {
+					return ct, name
 				}
 			}
 		case []any:
 			for _, sub := range t {
-				if got := walk(sub); got != "" {
-					return got
+				if ct, name := walk(sub); ct != "" {
+					return ct, name
 				}
 			}
 		}
-		return ""
+		return "", ""
 	}
 	var v any
 	if json.Unmarshal(showJSON, &v) != nil {
-		return ""
+		return "", ""
 	}
 	return walk(v)
 }
