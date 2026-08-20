@@ -272,6 +272,13 @@ func (s *Syncer) Sync(ctx context.Context, account, folder string) (int, error) 
 			return 0, ctx.Err()
 		}
 	}
+	// reindex always runs, even when every account just failed: notmuch new
+	// is what creates the database on a first run, and skipping it here
+	// would leave every other tool call failing with a raw, unwrapped
+	// "no such database" error instead of the graceful empty result an
+	// index that merely has nothing new in it returns.
+	s.markMirrored()
+	added, reindexErr := s.reindex(ctx)
 	// A pass where every attempted account failed is not a success — without
 	// this, it looked exactly like a quiet inbox to refreshTool, which
 	// reports "0 new message(s)" for both. A multi-account pass with at
@@ -279,8 +286,7 @@ func (s *Syncer) Sync(ctx context.Context, account, folder string) (int, error) 
 	if attempted > 0 && failed == attempted {
 		return 0, lastErr
 	}
-	s.markMirrored()
-	return s.reindex(ctx)
+	return added, reindexErr
 }
 
 // markMirrored records, in the index directory, that a mirror exists at

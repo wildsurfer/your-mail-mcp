@@ -179,6 +179,42 @@ func TestSyncFailsWhenEveryAttemptedAccountFails(t *testing.T) {
 	}
 }
 
+// TestSyncStillReindexesWhenEveryAccountFails guards a regression the F7
+// fix above introduced during this fix wave, caught by the live end-to-end
+// test: an early return skipping reindex on a totally-failed pass left the
+// notmuch database uncreated on a first run, so every other tool call then
+// failed with a raw "no such database" error instead of a graceful empty
+// result. notmuch new must still run — only Sync's return value changes.
+func TestSyncStillReindexesWhenEveryAccountFails(t *testing.T) {
+	if _, err := exec.LookPath("notmuch"); err != nil {
+		t.Skip("notmuch is not installed")
+	}
+	root := t.TempDir()
+	maildir := filepath.Join(root, "mail")
+	index := filepath.Join(root, "index")
+	for _, sub := range []string{"cur", "new", "tmp"} {
+		if err := os.MkdirAll(filepath.Join(maildir, "acct", "INBOX", sub), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.MkdirAll(index, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	config := filepath.Join(root, "notmuch-config")
+	if err := os.WriteFile(config, []byte(genNotmuchConfig(maildir, index)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	s := newSyncer(&Config{Accounts: []Account{{Name: "acct"}}}, maildir, index, "/tmp/none", newNotmuch(config))
+	s.runCmd = func(context.Context, string, ...string) error { return errors.New("AUTHENTICATIONFAILED") }
+	if _, err := s.Sync(context.Background(), "", ""); err == nil {
+		t.Fatal("want an error: the only account failed")
+	}
+	if _, err := os.Stat(filepath.Join(index, "xapian")); err != nil {
+		t.Errorf("notmuch new did not create the database despite the sync failing: %v", err)
+	}
+}
+
 func TestSyncOneAccountAndFolder(t *testing.T) {
 	s, calls := testSyncer(t)
 	if _, err := s.Sync(context.Background(), "home", "INBOX"); err != nil {
