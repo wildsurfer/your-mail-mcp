@@ -122,7 +122,13 @@ func newNotmuch(configPath string) *Notmuch { return &Notmuch{config: configPath
 
 func (n *Notmuch) run(ctx context.Context, args ...string) ([]byte, error) {
 	cmd := exec.CommandContext(ctx, "notmuch", args...)
-	cmd.Env = append(os.Environ(), "NOTMUCH_CONFIG="+n.config)
+	// notmuch does not need mail account passwords or anything else in the
+	// process environment; give it only what it needs to run.
+	cmd.Env = []string{
+		"NOTMUCH_CONFIG=" + n.config,
+		"HOME=" + os.Getenv("HOME"),
+		"PATH=" + os.Getenv("PATH"),
+	}
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr

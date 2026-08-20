@@ -2,9 +2,37 @@ package main
 
 import (
 	"context"
+	"os"
 	"strings"
 	"testing"
 )
+
+// TestNotmuchRunUsesMinimalEnvironment covers M3: notmuch subprocesses
+// inherited the full process environment, including mail account passwords
+// that have no business being visible to notmuch.
+func TestNotmuchRunUsesMinimalEnvironment(t *testing.T) {
+	t.Setenv("WORK_PASS", "hunter2")
+
+	tmpdir := t.TempDir()
+	fake := tmpdir + "/notmuch"
+	if err := os.WriteFile(fake, []byte("#!/bin/sh\nenv\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	oldPath := os.Getenv("PATH")
+	t.Setenv("PATH", tmpdir+":"+oldPath)
+
+	n := newNotmuch("/some/config")
+	out, err := n.run(context.Background(), "count", "*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(out), "WORK_PASS") {
+		t.Errorf("notmuch subprocess inherited an unrelated environment variable:\n%s", out)
+	}
+	if !strings.Contains(string(out), "NOTMUCH_CONFIG=/some/config") {
+		t.Errorf("notmuch subprocess is missing NOTMUCH_CONFIG:\n%s", out)
+	}
+}
 
 func TestValidateQuery(t *testing.T) {
 	ok := []string{
