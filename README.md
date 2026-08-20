@@ -26,6 +26,25 @@ export; attachments are listed by filename, media type and size in `show` and
 `thread`, but never served. Nothing in the process holds write access to any
 account.
 
+Nine tools, all read-only:
+
+| Tool | What it does |
+|---|---|
+| `search` | Search mail. Returns thread summaries as JSON. |
+| `ids` | Return the message ids matching a query. |
+| `files` | Return the maildir file paths matching a query. |
+| `count` | Count the messages matching a query. |
+| `show` | Show one message: headers and decoded body, as JSON. |
+| `thread` | Show the whole thread containing a message. |
+| `text` | Return the plain-text body of one message, converting HTML. |
+| `folders` | List accounts, their folders, index tags, and each account's last sync and last error. |
+| `refresh` | Sync INBOX now and report how many messages arrived. |
+
+`search`, `ids`, `files` and `count` take a notmuch query (`from:`, `to:`,
+`subject:`, `tag:`, `folder:`, `date:2026-01-01..2026-06-30`, combined with
+and/or/not), an optional `account` to scope to one account, and can include
+junk/trash with `include_excluded`.
+
 ## Quick start
 
 ```bash
@@ -114,6 +133,13 @@ An account name must be unique. At least one account is required; an empty
 `CONFIG`, `MAILDIR` and `INDEX` are required; the process refuses to start
 without them. `PUBLIC_URL` and `OAUTH_PASSPHRASE` are required by the OAuth
 layer and the process also fails to start without them.
+
+The container image already sets four of these (`Dockerfile`):
+`MAILDIR=/mail`, `INDEX=/index`, `CONFIG=/config/accounts.json`,
+`LISTEN_ADDR=:8080`. `compose.yaml` doesn't override any of them. Leave them
+alone unless you're also changing the matching volume mount or config mount
+in `compose.yaml` — an override that doesn't move the mount with it points
+the server at an empty or missing path.
 
 ## Connecting a client
 
@@ -216,16 +242,23 @@ password or an expired app-specific password does not stop the others —
 sync failures are isolated per account — but it will show up here as a
 `last error` line, not as silence.
 
-**"special-use discovery: account NAME: ..." in the container logs** means
-the startup `LIST` against that account's server failed or the server
-didn't respond usefully — a network problem, bad credentials, or (for
-servers that don't support RFC 6154 SPECIAL-USE at all) simply no
-attributes to read. This is not fatal: the account still syncs. What it
-means is that junk/trash exclusion falls back to a built-in list of common
-English folder names (`junk`, `spam`, `trash`, `deleted messages`, `deleted
-items`, `bulk mail`), matched case-insensitively against the last path
-component. If your junk folder has a different name — a non-English
+**Junk/trash exclusion, two different failure shapes:**
+
+- **"special-use discovery: account NAME: ..." in the container logs**
+  means the startup `LIST` for that account failed outright — the connect,
+  login, or `LIST` call itself errored (bad host, bad credentials, network
+  timeout). This is not fatal: the account still syncs, but that account
+  falls all the way back to a built-in list of common English folder names
+  (`junk`, `spam`, `trash`, `deleted messages`, `deleted items`, `bulk
+  mail`), matched case-insensitively against the last path component.
+- **A server that simply doesn't support RFC 6154 SPECIAL-USE logs
+  nothing.** `LIST` still succeeds, just without the attributes that mark a
+  mailbox as Junk or Trash, so the server silently falls back to the same
+  built-in name list — no error, no log line. The way to notice this is
+  `folders` showing nothing under "excluded from search" for that account.
+
+Either way, if your junk folder has a different name — a non-English
 locale, or something the server just calls something else — set
 `exclude_folders` for that account explicitly in `accounts.json`, e.g.
-`"exclude_folders": ["Papierkorb"]`, and it takes priority over both
+`"exclude_folders": ["Papierkorb"]`. It takes priority over both
 SPECIAL-USE and the built-in list.
