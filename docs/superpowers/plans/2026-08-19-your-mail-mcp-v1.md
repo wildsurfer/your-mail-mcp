@@ -2853,6 +2853,12 @@ func redirectAllowed(registered []string, candidate string) bool {
 	if err != nil {
 		return false
 	}
+	// A redirect URI carrying userinfo, a query or a fragment is refused
+	// outright: host-and-path comparison alone would let all three through,
+	// and RFC 6749 3.1.2 forbids the fragment.
+	if c.User != nil || c.RawQuery != "" || c.Fragment != "" {
+		return false
+	}
 	for _, r := range registered {
 		p, err := url.Parse(r)
 		if err != nil {
