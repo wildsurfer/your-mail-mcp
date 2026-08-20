@@ -48,8 +48,13 @@ func TestEndToEndRegisterAuthorizeTokenCall(t *testing.T) {
 	if resp.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("unauthenticated status = %d, want 401", resp.StatusCode)
 	}
-	if !strings.Contains(resp.Header.Get("WWW-Authenticate"), "resource_metadata=") {
-		t.Fatalf("WWW-Authenticate = %q, want a resource_metadata pointer", resp.Header.Get("WWW-Authenticate"))
+	// B4: the pointer must be the suffixed canonical path — the resource is
+	// PUBLIC_URL/mcp, and RFC 9728 builds the well-known location by
+	// inserting the well-known segment between the host and that path, not
+	// the bare fallback served at the root for a client that does not.
+	wantMeta := ts.URL + "/.well-known/oauth-protected-resource/mcp"
+	if got := resp.Header.Get("WWW-Authenticate"); !strings.Contains(got, `resource_metadata="`+wantMeta+`"`) {
+		t.Fatalf("WWW-Authenticate = %q, want it to point at %q", got, wantMeta)
 	}
 
 	// 2. Dynamic client registration.

@@ -64,6 +64,29 @@ func TestLoadConfigPreservesLiteralDollarSign(t *testing.T) {
 	}
 }
 
+// TestLoadConfigExpandsSpecialCharactersSafely covers F5: expansion used to
+// splice the raw environment value into the file's text before parsing it as
+// JSON. A value containing a `"` or a `\` then landed inside a JSON string
+// unescaped and broke the document it was embedded in, so the whole accounts
+// file failed to parse over a password some IMAP provider was happy to
+// accept. Expanding per already-parsed field means the substituted value
+// only has to be a valid Go string, never valid JSON.
+func TestLoadConfigExpandsSpecialCharactersSafely(t *testing.T) {
+	want := `p"ss\word`
+	t.Setenv("WORK_PASS", want)
+	path := writeConfig(t, `{"accounts":[
+		{"name":"work","host":"imap.gmail.com","user":"me@example.com","password":"${WORK_PASS}"}
+	]}`)
+
+	cfg, err := loadConfig(path)
+	if err != nil {
+		t.Fatalf("loadConfig: %v", err)
+	}
+	if cfg.Accounts[0].Password != want {
+		t.Errorf("password = %q, want %q byte-for-byte", cfg.Accounts[0].Password, want)
+	}
+}
+
 func TestLoadConfigRejectsBadInput(t *testing.T) {
 	cases := map[string]struct{ body, want string }{
 		"duplicate names": {
@@ -210,5 +233,54 @@ func TestLoadEnvRequiresTheEssentials(t *testing.T) {
 	}
 	if e.ListenAddr != ":8080" {
 		t.Errorf("ListenAddr = %q, want the :8080 default", e.ListenAddr)
+	}
+	if e.SyncTimeout != time.Hour {
+		t.Errorf("SyncTimeout = %v, want the 1h default", e.SyncTimeout)
+	}
+}
+
+func requiredEnvForLoadEnv(t *testing.T) {
+	t.Helper()
+	t.Setenv("CONFIG", "/tmp/accounts.json")
+	t.Setenv("MAILDIR", "/mail")
+	t.Setenv("INDEX", "/index")
+}
+
+// TestLoadEnvRejectsNonPositiveDurations covers F4: a zero or negative
+// SYNC_INTERVAL reaches time.NewTicker, which panics rather than returning
+// an error, so a typo like "SYNC_INTERVAL=0" crashed the whole process
+// instead of failing to start cleanly. SYNC_TIMEOUT feeds a per-account
+// context.WithTimeout instead, where a non-positive value would just hand
+// every sync a context that expires before it starts.
+func TestLoadEnvRejectsNonPositiveDurations(t *testing.T) {
+	for _, name := range []string{"SYNC_INTERVAL", "SYNC_TIMEOUT"} {
+		for _, bad := range []string{"0", "0s", "-5m"} {
+			t.Run(name+"="+bad, func(t *testing.T) {
+				requiredEnvForLoadEnv(t)
+				t.Setenv(name, bad)
+				_, err := loadEnv()
+				if err == nil {
+					t.Fatalf("%s=%s: want an error, got nil", name, bad)
+				}
+				if !strings.Contains(err.Error(), name) {
+					t.Errorf("error %q does not name %s", err, name)
+				}
+			})
+		}
+	}
+}
+
+// TestLoadEnvAcceptsAndAppliesSyncTimeout covers the rest of F8: SYNC_TIMEOUT
+// overrides the 1h default and is threaded from loadEnv into the Syncer (see
+// run in main.go); this checks the loadEnv half.
+func TestLoadEnvAcceptsAndAppliesSyncTimeout(t *testing.T) {
+	requiredEnvForLoadEnv(t)
+	t.Setenv("SYNC_TIMEOUT", "30m")
+	e, err := loadEnv()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if e.SyncTimeout != 30*time.Minute {
+		t.Errorf("SyncTimeout = %v, want 30m", e.SyncTimeout)
 	}
 }

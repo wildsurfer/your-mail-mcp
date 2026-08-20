@@ -60,13 +60,20 @@ func expandBracedEnv(s string) string {
 
 // loadConfig reads the accounts file, expands ${VAR} references against the
 // environment so secrets never sit in the file, then validates and defaults.
+//
+// Expansion runs after JSON is parsed, one string field at a time, not by
+// splicing text into the raw file before parsing it. A spliced-in secret
+// containing a `"` or a `\` would land inside a JSON string unescaped and
+// corrupt the document it is embedded in; expanding each already-parsed
+// field sidesteps that entirely; the substituted value never has to be valid
+// JSON, only a valid Go string.
 func loadConfig(path string) (*Config, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("accounts file: %w", err)
 	}
 	var cfg Config
-	if err := json.Unmarshal([]byte(expandBracedEnv(string(raw))), &cfg); err != nil {
+	if err := json.Unmarshal(raw, &cfg); err != nil {
 		return nil, fmt.Errorf("accounts file: %w", err)
 	}
 	if len(cfg.Accounts) == 0 {
@@ -75,6 +82,17 @@ func loadConfig(path string) (*Config, error) {
 	seen := map[string]bool{}
 	for i := range cfg.Accounts {
 		a := &cfg.Accounts[i]
+		a.Name = expandBracedEnv(a.Name)
+		a.Host = expandBracedEnv(a.Host)
+		a.User = expandBracedEnv(a.User)
+		a.Password = expandBracedEnv(a.Password)
+		a.TLS = expandBracedEnv(a.TLS)
+		for j, p := range a.Patterns {
+			a.Patterns[j] = expandBracedEnv(p)
+		}
+		for j, f := range a.ExcludeFolders {
+			a.ExcludeFolders[j] = expandBracedEnv(f)
+		}
 		if a.Name == "" || strings.ContainsAny(a.Name, `/\ "'`) {
 			return nil, fmt.Errorf("account %d: name must be non-empty and free of spaces, quotes and slashes", i)
 		}
@@ -126,6 +144,7 @@ type env struct {
 	ListenAddr   string
 	Passphrase   string
 	SyncInterval time.Duration
+	SyncTimeout  time.Duration
 	InitMirror   bool
 }
 
@@ -138,6 +157,7 @@ func loadEnv() (*env, error) {
 		ListenAddr:   os.Getenv("LISTEN_ADDR"),
 		Passphrase:   os.Getenv("OAUTH_PASSPHRASE"),
 		SyncInterval: 5 * time.Minute,
+		SyncTimeout:  time.Hour,
 		InitMirror:   os.Getenv("INIT_MIRROR") == "1",
 	}
 	for name, v := range map[string]string{"CONFIG": e.Config, "MAILDIR": e.Maildir, "INDEX": e.Index} {
@@ -148,14 +168,33 @@ func loadEnv() (*env, error) {
 	if e.ListenAddr == "" {
 		e.ListenAddr = ":8080"
 	}
-	if s := os.Getenv("SYNC_INTERVAL"); s != "" {
-		d, err := time.ParseDuration(s)
-		if err != nil {
-			return nil, fmt.Errorf("SYNC_INTERVAL: %w", err)
-		}
-		e.SyncInterval = d
+	if err := parseDurationEnv("SYNC_INTERVAL", &e.SyncInterval); err != nil {
+		return nil, err
+	}
+	if err := parseDurationEnv("SYNC_TIMEOUT", &e.SyncTimeout); err != nil {
+		return nil, err
 	}
 	return e, nil
+}
+
+// parseDurationEnv overrides *d with the named environment variable, if set,
+// and rejects a non-positive duration: a zero or negative SYNC_INTERVAL
+// makes time.NewTicker panic, and a non-positive SYNC_TIMEOUT would give
+// every account's sync a context that is already expired.
+func parseDurationEnv(name string, d *time.Duration) error {
+	s := os.Getenv(name)
+	if s == "" {
+		return nil
+	}
+	v, err := time.ParseDuration(s)
+	if err != nil {
+		return fmt.Errorf("%s: %w", name, err)
+	}
+	if v <= 0 {
+		return fmt.Errorf("%s: must be positive, got %s", name, v)
+	}
+	*d = v
+	return nil
 }
 
 // discoveryInterval bounds how often SPECIAL-USE discovery re-runs. It is
@@ -165,24 +204,43 @@ func loadEnv() (*env, error) {
 // login rate against every provider for no benefit. Hourly is ample.
 const discoveryInterval = time.Hour
 
+// applyConfiguredExclusions sets exclusions for every account with an
+// explicit exclude_folders list. It touches no network — excludedFolders
+// already prefers a configured list over anything discovery could return —
+// so it is safe and cheap to run synchronously at startup, before the
+// listener opens; see run.
+func applyConfiguredExclusions(cfg *Config, srv *Server) {
+	for _, a := range cfg.Accounts {
+		if len(a.ExcludeFolders) > 0 {
+			srv.setExcluded(a.Name, excludedFolders(a, nil, nil))
+		}
+	}
+}
+
 // refreshExclusions runs SPECIAL-USE discovery for every account and updates
 // srv's exclusions. Called once at startup and again on its own ticker (see
 // run), so a discovery failure is not permanent for the life of the process.
 //
-// On a failed attempt for an account with no configured exclude_folders,
-// setExcluded is skipped rather than called with an empty list: special and
-// all are both nil on error, and excludedFolders would otherwise return no
-// folders, silently wiping out whatever a previous successful attempt had
-// established. An account with exclude_folders configured is unaffected
-// either way, since excludedFolders already prefers the configured list.
+// An account with exclude_folders configured skips discovery entirely: the
+// answer is already known (excludedFolders prefers the configured list
+// regardless of what discovery finds), so there is nothing here worth an
+// IMAP LOGIN for.
+//
+// On a failed discovery attempt for an account with no configured
+// exclude_folders, setExcluded is skipped rather than called with an empty
+// list: special and all are both nil on error, and excludedFolders would
+// otherwise return no folders, silently wiping out whatever a previous
+// successful attempt had established.
 func refreshExclusions(ctx context.Context, cfg *Config, srv *Server) {
 	for _, a := range cfg.Accounts {
+		if len(a.ExcludeFolders) > 0 {
+			srv.setExcluded(a.Name, excludedFolders(a, nil, nil))
+			continue
+		}
 		special, all, err := discoverSpecialUse(ctx, a)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "special-use discovery: account %s: %v\n", a.Name, err)
-			if len(a.ExcludeFolders) == 0 {
-				continue
-			}
+			continue
 		}
 		srv.setExcluded(a.Name, excludedFolders(a, special, all))
 	}
@@ -238,8 +296,9 @@ func run() error {
 	}
 
 	nm := newNotmuch(notmuchPath)
-	syncer := newSyncer(cfg, e.Maildir, mbsyncPath, nm)
+	syncer := newSyncer(cfg, e.Maildir, e.Index, mbsyncPath, nm)
 	syncer.initMirror = e.InitMirror
+	syncer.timeout = e.SyncTimeout
 
 	srv := newServer(cfg, nm, e.Maildir)
 	srv.sync = syncer.Sync
@@ -256,12 +315,16 @@ func run() error {
 		return err
 	}
 
-	// Discover each account's junk and trash folders so search excludes them
-	// by default. A failing discovery is not fatal: the account simply has
-	// nothing excluded until the operator sets exclude_folders. Repeated on
-	// its own ticker (below) so an account that was unreachable at startup
-	// is not left unprotected for the rest of the process's life.
-	refreshExclusions(ctx, cfg, srv)
+	// Config-tier exclusions touch no network, so they are applied inline
+	// before the listener opens. Full discovery needs a live IMAP login per
+	// account and must not delay startup waiting on an unreachable provider,
+	// so it runs in a goroutine instead; repeated on its own ticker (below)
+	// so an account that was unreachable at startup is not left unprotected
+	// for the rest of the process's life. Trade-off: a discovered-tier
+	// account is briefly unprotected right after a restart, until its first
+	// discovery pass completes; a configured-tier account never is.
+	applyConfiguredExclusions(cfg, srv)
+	go refreshExclusions(ctx, cfg, srv)
 
 	go runTicker(ctx, discoveryInterval, func(ctx context.Context) {
 		refreshExclusions(ctx, cfg, srv)
@@ -310,7 +373,7 @@ func requireBearer(o *oauthServer, next http.Handler) http.Handler {
 		token := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
 		if token == "" || token == r.Header.Get("Authorization") || !o.validAccessToken(token) {
 			w.Header().Set("WWW-Authenticate",
-				fmt.Sprintf("Bearer resource_metadata=%q", o.publicURL+"/.well-known/oauth-protected-resource"))
+				fmt.Sprintf("Bearer resource_metadata=%q", o.publicURL+"/.well-known/oauth-protected-resource/mcp"))
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
