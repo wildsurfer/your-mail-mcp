@@ -394,7 +394,8 @@ func (o *oauthServer) grantCode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sum := sha256.Sum256([]byte(r.Form.Get("code_verifier")))
-	if base64.RawURLEncoding.EncodeToString(sum[:]) != ac.challenge {
+	computed := base64.RawURLEncoding.EncodeToString(sum[:])
+	if subtle.ConstantTimeCompare([]byte(computed), []byte(ac.challenge)) != 1 {
 		tokenError(w, "invalid_grant")
 		return
 	}
@@ -415,17 +416,29 @@ func (o *oauthServer) grantRefresh(w http.ResponseWriter, r *http.Request) {
 	if ok && clientID != "" && clientID != rt.ClientID {
 		ok = false
 	}
+	var saveErr error
 	if ok {
 		// Rotation: the presented token dies in the same response that
 		// issues its replacement, which OAuth 2.1 requires for public
 		// clients.
 		delete(o.state.Refresh, presented)
-		_ = o.save()
+		saveErr = o.save()
+		if saveErr != nil {
+			// The deletion never reached disk. Put the token back so memory
+			// agrees with the last thing actually persisted: otherwise a
+			// restart before some later save reloads the token as valid
+			// again, while this process just told the client it was dead.
+			o.state.Refresh[presented] = rt
+		}
 	}
 	o.mu.Unlock()
 
 	if !ok {
 		tokenError(w, "invalid_grant")
+		return
+	}
+	if saveErr != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "server_error"})
 		return
 	}
 	o.issue(w, rt.ClientID)

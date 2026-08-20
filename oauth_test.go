@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -746,5 +747,66 @@ func TestAuthorizeSerializesFailedPassphraseAttempts(t *testing.T) {
 
 	if elapsed < 2*o.failDelay {
 		t.Errorf("two concurrent wrong-passphrase attempts finished in %v, want at least %v (serialized)", elapsed, 2*o.failDelay)
+	}
+}
+
+// If the disk write that rotates a refresh token fails, the rotation must
+// not take effect anywhere a restart could observe: not in the response to
+// the client, and not by silently leaving the old token dead in memory
+// while the last thing actually persisted still lists it as valid. Both
+// must fail closed together, or a crash between the two leaves a
+// rotated-away token alive again after a restart.
+func TestTokenRefreshFailsClosedWhenPersistFails(t *testing.T) {
+	dir := t.TempDir()
+	o, err := newOAuth(filepath.Join(dir, "oauth.json"), "https://mail.example.com", "hunter2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	o.failDelay = 0
+	id := registeredClient(t, o)
+	code := issueCode(t, o, id)
+
+	_, out := postToken(t, o, url.Values{
+		"grant_type":    {"authorization_code"},
+		"code":          {code},
+		"client_id":     {id},
+		"redirect_uri":  {"https://claude.ai/api/mcp/auth_callback"},
+		"code_verifier": {verifier},
+	})
+	refresh, _ := out["refresh_token"].(string)
+	if refresh == "" {
+		t.Fatalf("no refresh token issued: %v", out)
+	}
+
+	// Make the next save fail: strip write permission from the directory
+	// holding the state file, so creating the ".tmp" file for the atomic
+	// rename fails.
+	if err := os.Chmod(dir, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o755) })
+
+	status, out := postToken(t, o, url.Values{
+		"grant_type":    {"refresh_token"},
+		"refresh_token": {refresh},
+		"client_id":     {id},
+	})
+	if status != http.StatusInternalServerError || out["error"] != "server_error" {
+		t.Fatalf("persist failure: status %d, %v; want 500 server_error", status, out)
+	}
+
+	// Restore persistence and confirm the old token is still the one on
+	// record: it must not have been silently rotated in memory without
+	// that rotation being saved.
+	if err := os.Chmod(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	status, out = postToken(t, o, url.Values{
+		"grant_type":    {"refresh_token"},
+		"refresh_token": {refresh},
+		"client_id":     {id},
+	})
+	if status != http.StatusOK {
+		t.Errorf("the old refresh token did not survive a failed persist: status %d, %v", status, out)
 	}
 }
