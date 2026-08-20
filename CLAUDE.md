@@ -86,6 +86,12 @@ without changing the spec first.
 - `INBOX` is the only folder name that may be hardcoded; RFC 3501 requires it.
 - Pipeline depth is pinned to 1 and `SubFolders` to `Verbatim`, and `AuthMechs` is
   left unset. Those are settled; see the spec for why.
+- Dependencies stay on the latest stable release everywhere: the Go toolchain,
+  the two modules, and the image's base and packages. When no stable release
+  exists, the newest available is used and named as the exception — today that
+  is `go-imap/v2`, which has never shipped a stable v2. When bumping the base
+  image, run the live test: the container's tool versions are exactly what it
+  exists to catch.
 - Commit messages describe the change in plain terms. No AI or agent attribution
   anywhere in the repository.
 

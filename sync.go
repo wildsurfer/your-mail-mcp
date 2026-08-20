@@ -75,10 +75,11 @@ func genMbsyncrc(cfg *Config, maildir string) string {
 		b.WriteString("Port " + strconv.Itoa(a.Port) + "\n")
 		b.WriteString("User " + a.User + "\n")
 		b.WriteString("Pass " + quoteMbsync(a.Password) + "\n")
-		// SSLType, not TLSType: TLSType was introduced in isync 1.5, and Debian
-		// bookworm — the image's base — ships 1.4.4, which rejects the file
-		// outright. 1.5 still accepts SSLType and only prints a deprecation
-		// notice, so this is the one spelling that works on both.
+		// SSLType, not TLSType: TLSType only exists in isync 1.5+, while
+		// SSLType works everywhere — 1.5 merely prints a deprecation notice.
+		// The image ships 1.5.x, but the binary also runs outside it, on
+		// distributions still carrying 1.4.x, and this is the one spelling
+		// that works on both.
 		b.WriteString("SSLType " + tls + "\n")
 		if a.TLS == "none" {
 			// mbsync refuses to send LOGIN over an unencrypted connection

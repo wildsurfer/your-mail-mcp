@@ -62,7 +62,7 @@ const alternativeFixture = "From: alice@example.com\r\n" +
 	"<html><body>HTMLVERSION</body></html>\r\n" +
 	"--BOUND--\r\n"
 
-// cyrillicFixture covers N2: w3m 0.5.3 in the shipped debian:bookworm-slim
+// cyrillicFixture covers N2: w3m in a slim Debian image (no UTF-8 locale)
 // image has no UTF-8 locale and defaults its output charset to ASCII,
 // replacing every non-ASCII character with "?". This message has no
 // text/plain part, so text always goes through w3m regardless of the N3
@@ -486,7 +486,7 @@ func TestTextToolReturnsAlternativeBodyOnce(t *testing.T) {
 }
 
 // TestTextToolHandlesUTF8 covers N2: w3m 0.5.3 in the shipped
-// debian:bookworm-slim image has no UTF-8 locale and defaults its output
+// slim Debian image has no UTF-8 locale and defaults its output
 // charset to ASCII, replacing every non-ASCII character with "?". The host
 // w3m (0.5.6) defaults to UTF-8 already, so this passes here either way;
 // see the report for the container reproduction that actually exercises the

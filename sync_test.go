@@ -39,8 +39,8 @@ func TestGenMbsyncrcIsPullOnlyForEveryAccount(t *testing.T) {
 	if !strings.Contains(out, "SSLType IMAPS") || !strings.Contains(out, "SSLType STARTTLS") {
 		t.Error("both TLS modes should appear, one per account")
 	}
-	// TLSType only exists in isync 1.5+, and the shipped image runs 1.4.4,
-	// which refuses to parse a file containing it at all.
+	// TLSType only exists in isync 1.5+; a 1.4.x mbsync refuses to parse a
+	// file containing it at all, and the binary must run on both.
 	if strings.Contains(out, "TLSType") {
 		t.Error("TLSType is unknown to isync 1.4.x; the generated config must say SSLType")
 	}

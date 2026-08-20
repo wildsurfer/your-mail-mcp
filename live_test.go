@@ -111,9 +111,20 @@ func TestLive(t *testing.T) {
 		t.Skip("docker is not installed")
 	}
 	liveCompose(t, "up", "-d", "--build")
-	t.Cleanup(func() { liveCompose(t, "down", "-v") })
+	t.Cleanup(func() {
+		if t.Failed() {
+			// Teardown destroys the evidence, so capture it first.
+			out, _ := exec.Command("docker", "compose", "-p", "ymm-live",
+				"-f", "compose.yaml", "-f", "testdata/live/compose.live.yaml",
+				"logs", "--tail", "40").CombinedOutput()
+			t.Logf("stack logs before teardown:\n%s", out)
+		}
+		liveCompose(t, "down", "-v")
+	})
 
-	// The server is up when its metadata answers.
+	// Two services have to come up: ours is ready when its metadata answers,
+	// and GreenMail — a JVM, much slower to boot — when SMTP answers its
+	// banner. Seeding before the second is ready fails with a bare EOF.
 	deadline := time.Now().Add(3 * time.Minute)
 	for {
 		resp, err := http.Get(liveBase + "/.well-known/oauth-authorization-server")
@@ -123,6 +134,17 @@ func TestLive(t *testing.T) {
 		}
 		if time.Now().After(deadline) {
 			t.Fatal("server never became ready")
+		}
+		time.Sleep(2 * time.Second)
+	}
+	for {
+		c, err := smtp.Dial(liveSMTP)
+		if err == nil {
+			c.Close()
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("GreenMail SMTP never became ready")
 		}
 		time.Sleep(2 * time.Second)
 	}
