@@ -2,9 +2,11 @@ package main
 
 import (
 	"crypto/rand"
+	"crypto/subtle"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"html/template"
 	"net/http"
 	"net/url"
 	"os"
@@ -40,6 +42,7 @@ type oauthServer struct {
 	path       string
 	publicURL  string
 	passphrase string
+	failDelay  time.Duration
 
 	mu    sync.Mutex
 	state oauthState
@@ -61,6 +64,7 @@ func newOAuth(statePath, publicURL, passphrase string) (*oauthServer, error) {
 		path:       statePath,
 		publicURL:  strings.TrimSuffix(publicURL, "/"),
 		passphrase: passphrase,
+		failDelay:  time.Second,
 		state:      oauthState{Clients: map[string]*oauthClient{}, Refresh: map[string]*refreshToken{}},
 		codes:      map[string]authCode{},
 		access:     map[string]time.Time{},
@@ -191,17 +195,18 @@ func isLoopback(u *url.URL) bool {
 // or a loopback IP literal interchangeably (RFC 8252). Everything else must
 // match scheme, host and path exactly.
 //
-// Userinfo and query strings on the candidate are rejected outright rather
-// than compared: OAuth redirect URIs are meant to match their registration
-// exactly (RFC 9700), and neither loopback port variance nor anything else
-// in this project's flow needs either, so their presence is treated as
-// malformed rather than matched loosely.
+// Userinfo, query strings and fragments on the candidate are rejected
+// outright rather than compared: OAuth redirect URIs are meant to match
+// their registration exactly (RFC 9700), a fragment on the redirect is
+// forbidden outright by RFC 6749 3.1.2, and neither loopback port variance
+// nor anything else in this project's flow needs any of the three, so their
+// presence is treated as malformed rather than matched loosely.
 func redirectAllowed(registered []string, candidate string) bool {
 	c, err := url.Parse(candidate)
 	if err != nil {
 		return false
 	}
-	if c.User != nil || c.RawQuery != "" {
+	if c.User != nil || c.RawQuery != "" || c.Fragment != "" {
 		return false
 	}
 	for _, r := range registered {
@@ -234,4 +239,99 @@ func (o *oauthServer) handleASMetadata(w http.ResponseWriter, _ *http.Request) {
 		"token_endpoint_auth_methods_supported": []string{"none"},
 		"scopes_supported":                      []string{"mail.read"},
 	})
+}
+
+const codeTTL = 60 * time.Second
+
+var consentPage = template.Must(template.New("consent").Parse(`<!doctype html>
+<html><head><meta charset="utf-8"><title>Authorise access to your mail</title></head>
+<body>
+<h1>Authorise access to your mail</h1>
+<p>{{.ClientName}} is asking to read your mail. It cannot send, delete or change anything.</p>
+{{if .Failed}}<p><strong>That passphrase was not correct.</strong></p>{{end}}
+<form method="post" action="/authorize">
+  <input type="hidden" name="response_type" value="code">
+  <input type="hidden" name="client_id" value="{{.ClientID}}">
+  <input type="hidden" name="redirect_uri" value="{{.RedirectURI}}">
+  <input type="hidden" name="state" value="{{.State}}">
+  <input type="hidden" name="code_challenge" value="{{.Challenge}}">
+  <input type="hidden" name="code_challenge_method" value="S256">
+  <label>Passphrase <input type="password" name="passphrase" autofocus></label>
+  <button type="submit">Authorise</button>
+</form>
+</body></html>`))
+
+func (o *oauthServer) handleAuthorize(w http.ResponseWriter, r *http.Request) {
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+	var (
+		clientID  = r.Form.Get("client_id")
+		redirect  = r.Form.Get("redirect_uri")
+		state     = r.Form.Get("state")
+		challenge = r.Form.Get("code_challenge")
+		method    = r.Form.Get("code_challenge_method")
+	)
+	// Every check below happens before anything is echoed into a redirect. An
+	// unvalidated redirect_uri turned into a Location header is an open
+	// redirect, so failures here render an error page instead.
+	c := o.client(clientID)
+	if c == nil {
+		http.Error(w, "unknown client", http.StatusBadRequest)
+		return
+	}
+	if !redirectAllowed(c.RedirectURIs, redirect) {
+		http.Error(w, "redirect_uri does not match this client's registration", http.StatusBadRequest)
+		return
+	}
+	if r.Form.Get("response_type") != "code" {
+		http.Error(w, "response_type must be code", http.StatusBadRequest)
+		return
+	}
+	if method != "S256" || challenge == "" {
+		http.Error(w, "code_challenge_method must be S256", http.StatusBadRequest)
+		return
+	}
+
+	// The passphrase is typed into this page. If another site can frame it,
+	// a clickjacking overlay can steer that click and submission.
+	w.Header().Set("X-Frame-Options", "DENY")
+
+	data := struct {
+		ClientName, ClientID, RedirectURI, State, Challenge string
+		Failed                                              bool
+	}{c.Name, clientID, redirect, state, challenge, false}
+
+	if r.Method == http.MethodGet {
+		_ = consentPage.Execute(w, data)
+		return
+	}
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+
+	given := r.Form.Get("passphrase")
+	if subtle.ConstantTimeCompare([]byte(given), []byte(o.passphrase)) != 1 {
+		time.Sleep(o.failDelay) // blunt the value of guessing repeatedly
+		data.Failed = true
+		w.WriteHeader(http.StatusUnauthorized)
+		_ = consentPage.Execute(w, data)
+		return
+	}
+
+	code := randomToken()
+	o.mu.Lock()
+	o.codes[code] = authCode{clientID: clientID, redirect: redirect, challenge: challenge, expires: time.Now().Add(codeTTL)}
+	o.mu.Unlock()
+
+	u, _ := url.Parse(redirect)
+	q := u.Query()
+	q.Set("code", code)
+	if state != "" {
+		q.Set("state", state)
+	}
+	u.RawQuery = q.Encode()
+	http.Redirect(w, r, u.String(), http.StatusFound)
 }
