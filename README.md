@@ -77,7 +77,7 @@ put the secrets it references in a `.env` file next to `compose.yaml`:
 
 ```bash
 # .env
-OAUTH_PASSPHRASE=pick-a-long-one-you-can-type-on-a-phone
+OAUTH_PASSPHRASE=pick-a-long-one-you-can-type-on-a-smartphone
 WORK_PASS=your-gmail-app-password
 PERSONAL_PASS=your-icloud-app-specific-password
 ```
@@ -94,7 +94,7 @@ somewhere else, keep them out of version control there too.
 
 The server binds to loopback. Nothing outside your machine can reach it, so
 there is no TLS to arrange and no hostname to own. Your CLI tools can use it.
-Your phone cannot.
+Your smartphone cannot.
 
 Add one line to `.env`:
 
@@ -159,7 +159,7 @@ It opens the same consent page on first run and caches the tokens.
 
 Same server, plus something that gives it a public HTTPS address. Your mail
 stays on your machine, and nothing listens on your home network, because the
-tunnel dials out. You need this for the phone and desktop apps: a custom
+tunnel dials out. You need this for the smartphone and desktop apps: a custom
 connector is fetched by the vendor's servers, so it cannot reach a private
 address.
 
@@ -239,9 +239,42 @@ Then set `PUBLIC_URL=https://mail.example.com` in `.env` and
 publishes `PUBLIC_URL + /mcp` as the `resource` in its OAuth metadata, and a
 mismatch there is the most common reason a connector refuses to add.
 
-**Claude apps (phone, desktop, web)** — add a custom connector with the URL
-`<PUBLIC_URL>/mcp`. The app registers itself, opens the consent page, and asks
-for your passphrase.
+One thing to know before you start on a smartphone: **neither Claude nor
+ChatGPT lets you add a connector from the smartphone app.** You add it once on
+the web (or in Claude's desktop app), and it then shows up on your smartphone.
+Trying to do the setup on the smartphone itself will waste your time.
+
+**Claude — add on web or desktop, then use on your smartphone**
+
+1. On [claude.ai](https://claude.ai) or in Claude Desktop, go to
+   **Settings → Connectors**, and click **+** next to Connectors, or
+   **Add custom connector**.
+2. Give it a name and the URL `<PUBLIC_URL>/mcp`. Leave the advanced OAuth
+   fields empty: this server registers clients dynamically.
+3. Claude opens the consent page. Enter your `OAUTH_PASSPHRASE`.
+4. Open the Claude app on your smartphone. The connector is already there, and
+   the tools are available in a chat. Turn it on for a conversation from the
+   tools or connectors menu in the composer.
+
+**ChatGPT — add on web, then use on your smartphone**
+
+Custom MCP connectors live behind developer mode, which needs a Pro, Plus,
+Business, Enterprise or Education account and is only available on the web.
+
+1. In ChatGPT on the web, open **Settings → Security and login** and turn on
+   **Developer mode**. On Business and Enterprise workspaces an admin may have
+   to allow it first.
+2. Add a connector for a remote MCP server and give it the URL
+   `<PUBLIC_URL>/mcp`, with OAuth as the authentication. ChatGPT supports
+   dynamic client registration, so there is nothing to paste.
+3. Approve the consent page with your `OAUTH_PASSPHRASE`.
+4. Open ChatGPT on your smartphone and enable the connector in a chat.
+
+These menus move. If the names above do not match what you see, look for
+developer mode in settings, then for the place that adds a connector by URL.
+
+ChatGPT disables some MCP write actions on mobile. That has no effect here,
+because this server has no write actions at all.
 
 **Claude Code**
 
@@ -314,7 +347,7 @@ install steps. It is ordered by how much it buys you. Case 1 needs none of it.
 **Pick a real passphrase.** `OAUTH_PASSPHRASE` is the whole door. A wrong
 guess costs the attacker one second, and guesses are serialised so running
 them in parallel does not help, but neither of those saves a short passphrase.
-Use a long one you can still type on a phone.
+Use a long one you can still type on a smartphone.
 
 **Lock down SSH** (case 3). A rented box with password login and a copy of
 your mail on it is the worst combination in this document. As root, before
