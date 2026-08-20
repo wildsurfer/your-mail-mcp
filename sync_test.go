@@ -3,11 +3,15 @@ package main
 import (
 	"context"
 	"errors"
+	"io"
+	"net"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 func TestGenMbsyncrcIsPullOnlyForEveryAccount(t *testing.T) {
@@ -202,6 +206,57 @@ func TestSyncRefusesAnUninitialisedMaildir(t *testing.T) {
 	}
 }
 
+// TestDiscoverSpecialUseRespectsContextCancellation covers I4: neither Login
+// nor List had a deadline, and the function ignored the ctx it was given, so
+// a server that accepted the connection and then went quiet could hang here
+// indefinitely with no way to cancel it — during which SIGTERM did nothing,
+// since nothing was watching ctx.Done() to unblock the pending call.
+//
+// The fake server below accepts the connection and never sends a byte. A
+// correct discoverSpecialUse ties its unblocking to ctx cancellation via
+// context.AfterFunc, so cancelling ctx must make it return promptly, well
+// before any internal library timeout would.
+func TestDiscoverSpecialUseRespectsContextCancellation(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	go func() {
+		conn, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		_, _ = io.Copy(io.Discard, conn) // silent: never responds, returns once the client closes
+	}()
+
+	host, portStr, err := net.SplitHostPort(ln.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	port, err := strconv.Atoi(portStr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := Account{Name: "stall", Host: host, Port: port, TLS: "none", User: "u", Password: "p"}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	done := make(chan struct{})
+	go func() {
+		discoverSpecialUse(ctx, a)
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("discoverSpecialUse did not return promptly after its context was cancelled; a stalled connection blocks it")
+	}
+}
+
 func TestWellKnownJunkMatchesCommonNames(t *testing.T) {
 	got := wellKnownJunk([]string{
 		"INBOX", "Archive", "Junk", "Deleted Messages", "[Gmail]/Spam", "INBOX.Trash", "Projects",
@@ -226,7 +281,7 @@ func TestWellKnownJunkMatchesCommonNames(t *testing.T) {
 // take priority over it.
 func TestExcludedFoldersPrefersConfigAndPrefixesTheAccount(t *testing.T) {
 	a := Account{Name: "work", ExcludeFolders: []string{"Rubbish"}}
-	got := excludedFolders(context.Background(), a, []string{"SpecialJunk"}, []string{"INBOX", "Rubbish", "Junk"})
+	got := excludedFolders(a, []string{"SpecialJunk"}, []string{"INBOX", "Rubbish", "Junk"})
 	for _, want := range []string{"work/Rubbish"} {
 		if !contains(got, want) {
 			t.Errorf("excludedFolders = %v, want it to contain %q", got, want)
@@ -248,7 +303,7 @@ func TestExcludedFoldersPrefersConfigAndPrefixesTheAccount(t *testing.T) {
 func TestExcludedFoldersFallsBackToWellKnownNamesWhenSpecialUseIsEmpty(t *testing.T) {
 	a := Account{Name: "work"}
 	all := []string{"INBOX", "Archive", "[Gmail]/Spam", "INBOX.Trash", "Papierkorb"}
-	got := excludedFolders(context.Background(), a, nil, all)
+	got := excludedFolders(a, nil, all)
 	for _, want := range []string{"work/[Gmail]/Spam", "work/INBOX.Trash"} {
 		if !contains(got, want) {
 			t.Errorf("excludedFolders = %v, want it to contain %q", got, want)
@@ -272,7 +327,7 @@ func TestExcludedFoldersPassesThroughSpecialUseWhenNoConfig(t *testing.T) {
 	a := Account{Name: "work"}
 	special := []string{"Papierkorb", "Custom Archive"}
 	all := []string{"INBOX", "Papierkorb", "Custom Archive", "Deleted Messages"}
-	got := excludedFolders(context.Background(), a, special, all)
+	got := excludedFolders(a, special, all)
 	want := []string{"work/Custom Archive", "work/Papierkorb"}
 	if len(got) != len(want) {
 		t.Fatalf("excludedFolders = %v, want exactly %v", got, want)

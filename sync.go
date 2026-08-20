@@ -54,9 +54,9 @@ synchronize_flags=true
 // something that pushes, and a stray blank line cannot silently demote them to
 // global options.
 //
-// The password is written into the file. The file lives in a tmpfs inside the
-// container with mode 0600, so it is no more exposed than the environment it
-// came from.
+// The password is written into the file. The file lives on the ordinary
+// container filesystem, in a directory only this process writes to, at mode
+// 0600, so it is no more exposed than the environment it came from.
 func genMbsyncrc(cfg *Config, maildir string) string {
 	var b strings.Builder
 	b.WriteString("# generated at startup; edits are discarded on restart\n")
@@ -266,6 +266,14 @@ var junkNames = []string{"junk", "spam", "trash", "deleted messages", "deleted i
 // SPECIAL-USE discovery.
 const discoveryDialTimeout = 30 * time.Second
 
+// discoveryTimeout bounds the rest of the conversation once the connection is
+// up. Neither Login nor List has a deadline of its own: a server that accepts
+// the connection and then goes quiet (a stateful firewall dropping the flow,
+// a provider throttling by stalling, a load balancer holding the socket)
+// would otherwise hang here forever, and this loop runs before the process
+// starts listening, so nothing else in the server can make progress either.
+const discoveryTimeout = 30 * time.Second
+
 func wellKnownJunk(folders []string) []string {
 	var out []string
 	for _, f := range folders {
@@ -311,6 +319,15 @@ func discoverSpecialUse(ctx context.Context, a Account) (special, all []string, 
 	}
 	defer c.Close()
 
+	// Closing the connection is the only way to unblock a pending Login or
+	// List call. This ties that to both the caller's context (shutdown) and
+	// a fixed deadline (a server that stops responding mid-conversation), so
+	// a stalled discovery cannot make the process unkillable.
+	stop := context.AfterFunc(ctx, func() { c.Close() })
+	defer stop()
+	timer := time.AfterFunc(discoveryTimeout, func() { c.Close() })
+	defer timer.Stop()
+
 	if err := c.Login(a.User, a.Password).Wait(); err != nil {
 		return nil, nil, err
 	}
@@ -334,7 +351,7 @@ func discoverSpecialUse(ctx context.Context, a Account) (special, all []string, 
 // excludedFolders returns the folders to keep out of search for one account, as
 // notmuch folder paths. Config wins, then SPECIAL-USE, then the name list run
 // over every discovered mailbox.
-func excludedFolders(ctx context.Context, a Account, special, all []string) []string {
+func excludedFolders(a Account, special, all []string) []string {
 	names := a.ExcludeFolders
 	if len(names) == 0 {
 		names = special

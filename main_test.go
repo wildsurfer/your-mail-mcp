@@ -46,6 +46,24 @@ func TestLoadConfigExpandsSecretsAndFillsDefaults(t *testing.T) {
 	}
 }
 
+// TestLoadConfigPreservesLiteralDollarSign covers M4: os.ExpandEnv expands a
+// bare $VAR as well as ${VAR}, so a literal password like "p$ssw0rd" was
+// silently mangled to "p" (ssw0rd read as an unset variable name and
+// expanded to nothing) with no error, and the account then failed to
+// authenticate with an IMAP error that names nothing useful.
+func TestLoadConfigPreservesLiteralDollarSign(t *testing.T) {
+	path := writeConfig(t, `{"accounts":[
+		{"name":"work","host":"imap.gmail.com","user":"me@example.com","password":"p$ssw0rd"}
+	]}`)
+	cfg, err := loadConfig(path)
+	if err != nil {
+		t.Fatalf("loadConfig: %v", err)
+	}
+	if cfg.Accounts[0].Password != "p$ssw0rd" {
+		t.Errorf("password = %q, want the literal value preserved", cfg.Accounts[0].Password)
+	}
+}
+
 func TestLoadConfigRejectsBadInput(t *testing.T) {
 	cases := map[string]struct{ body, want string }{
 		"duplicate names": {
@@ -96,6 +114,30 @@ func TestLoadConfigRejectsBadInput(t *testing.T) {
 				t.Errorf("error %q does not mention %q", err, tc.want)
 			}
 		})
+	}
+}
+
+// TestRefreshExclusionsAppliesConfiguredFoldersEvenWhenDiscoveryFails covers
+// the rest of I4: discovery ran once, at startup only, so an account
+// unreachable at that moment had nothing excluded for the entire life of the
+// process. refreshExclusions is the extracted helper both the startup call
+// and the sync ticker now share, so a later successful tick heals it; this
+// checks the helper itself still applies a configured exclude_folders list
+// even when the discovery connection fails outright (port 1 refuses
+// immediately), matching excludedFolders' existing config-wins behavior.
+func TestRefreshExclusionsAppliesConfiguredFoldersEvenWhenDiscoveryFails(t *testing.T) {
+	cfg := &Config{Accounts: []Account{
+		{Name: "work", Host: "127.0.0.1", Port: 1, TLS: "none", User: "u", Password: "p", ExcludeFolders: []string{"Rubbish"}},
+	}}
+	srv := newServer(cfg, nil, t.TempDir())
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	refreshExclusions(ctx, cfg, srv)
+
+	got := srv.excludedFor("work")
+	if len(got) != 1 || got[0] != "work/Rubbish" {
+		t.Errorf("excluded = %v, want [work/Rubbish] applied despite the discovery connection failing", got)
 	}
 }
 

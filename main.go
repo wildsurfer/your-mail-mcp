@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"syscall"
 	"time"
@@ -45,6 +46,18 @@ func hasWhitespaceOrControl(s string) bool {
 	return false
 }
 
+// envRef matches ${VAR} references only. os.ExpandEnv also expands a bare
+// $VAR, which mangles a literal "$" in a value that was never meant to be a
+// reference (a password of "p$ssw0rd" becomes "p"); braces-only expansion
+// leaves a bare "$" untouched.
+var envRef = regexp.MustCompile(`\$\{(\w+)\}`)
+
+func expandBracedEnv(s string) string {
+	return envRef.ReplaceAllStringFunc(s, func(m string) string {
+		return os.Getenv(envRef.FindStringSubmatch(m)[1])
+	})
+}
+
 // loadConfig reads the accounts file, expands ${VAR} references against the
 // environment so secrets never sit in the file, then validates and defaults.
 func loadConfig(path string) (*Config, error) {
@@ -53,7 +66,7 @@ func loadConfig(path string) (*Config, error) {
 		return nil, fmt.Errorf("accounts file: %w", err)
 	}
 	var cfg Config
-	if err := json.Unmarshal([]byte(os.ExpandEnv(string(raw))), &cfg); err != nil {
+	if err := json.Unmarshal([]byte(expandBracedEnv(string(raw))), &cfg); err != nil {
 		return nil, fmt.Errorf("accounts file: %w", err)
 	}
 	if len(cfg.Accounts) == 0 {
@@ -145,6 +158,19 @@ func loadEnv() (*env, error) {
 	return e, nil
 }
 
+// refreshExclusions runs SPECIAL-USE discovery for every account and updates
+// srv's exclusions. Called once at startup and again on every sync tick (see
+// run), so a discovery failure is not permanent for the life of the process.
+func refreshExclusions(ctx context.Context, cfg *Config, srv *Server) {
+	for _, a := range cfg.Accounts {
+		special, all, err := discoverSpecialUse(ctx, a)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "special-use discovery: account %s: %v\n", a.Name, err)
+		}
+		srv.setExcluded(a.Name, excludedFolders(a, special, all))
+	}
+}
+
 // runTicker calls fn every interval until ctx is cancelled. It does not fire
 // overlapping passes itself; fn (the syncer) is responsible for refusing a
 // concurrent run, since the ticker has no way to know how long fn will take.
@@ -205,27 +231,28 @@ func run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	// Discover each account's junk and trash folders so search excludes them
-	// by default. A failing discovery is not fatal: the account simply has
-	// nothing excluded until the operator sets exclude_folders.
-	for _, a := range cfg.Accounts {
-		special, all, err := discoverSpecialUse(ctx, a)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "special-use discovery: account %s: %v\n", a.Name, err)
-		}
-		srv.excluded[a.Name] = excludedFolders(ctx, a, special, all)
+	// Built before the discovery loop below: a missing OAUTH_PASSPHRASE or
+	// PUBLIC_URL should exit the process immediately, not after logging in
+	// to every configured account first.
+	o, err := newOAuth(filepath.Join(e.Index, "oauth.json"), e.PublicURL, e.Passphrase)
+	if err != nil {
+		return err
 	}
 
+	// Discover each account's junk and trash folders so search excludes them
+	// by default. A failing discovery is not fatal: the account simply has
+	// nothing excluded until the operator sets exclude_folders. Repeated on
+	// every sync tick (below) so an account that was unreachable at startup
+	// is not left unprotected for the rest of the process's life.
+	refreshExclusions(ctx, cfg, srv)
+
 	go runTicker(ctx, e.SyncInterval, func(ctx context.Context) {
+		refreshExclusions(ctx, cfg, srv)
 		if _, err := syncer.Sync(ctx, "", ""); err != nil && !errors.Is(err, errSyncBusy) {
 			fmt.Fprintln(os.Stderr, "sync:", err)
 		}
 	})
 
-	o, err := newOAuth(filepath.Join(e.Index, "oauth.json"), e.PublicURL, e.Passphrase)
-	if err != nil {
-		return err
-	}
 	m := mcp.NewServer(&mcp.Implementation{Name: "your-mail-mcp", Version: "0.1.0"}, nil)
 	srv.registerTools(m)
 
