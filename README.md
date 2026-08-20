@@ -35,7 +35,7 @@ Nine tools, all read-only:
 | `files` | Return the maildir file paths matching a query. |
 | `count` | Count the messages matching a query. |
 | `show` | Show one message: headers and decoded body, as JSON. |
-| `thread` | Show the whole thread containing a message. |
+| `thread` | Show the whole thread containing a message. Excludes junk/trash replies by default; set `include_excluded` to include them. |
 | `text` | Return the plain-text body of one message, converting HTML. |
 | `folders` | List accounts, their folders, index tags, and each account's last sync and last error. |
 | `refresh` | Sync INBOX now and report how many messages arrived. |
@@ -189,6 +189,15 @@ don't want to re-sync from scratch after losing the host; there's nothing in
 them that isn't also on the mail server, but a full mirror re-download of a
 large mailbox takes a while.
 
+### Building a multi-arch image
+
+The image needs to run on both an arm64 Mac mini and an amd64 VPS from the
+same tag. Build and push both platforms with `buildx`:
+
+```bash
+docker buildx build --platform linux/amd64,linux/arm64 -t ghcr.io/wildsurfer/your-mail-mcp:latest --push .
+```
+
 ## Provider notes
 
 These were confirmed against real accounts while building this server.
@@ -225,6 +234,15 @@ attempt to.
 The OAuth passphrase is checked in constant time and gates the whole server
 with a single shared secret; it is not a per-user credential system. Treat
 `OAUTH_PASSPHRASE` and the mail account passwords with the same care.
+
+`search`'s thread summaries include a display name for every message in a
+matching thread, which a sender controls. A message in a folder excluded by
+default (junk, trash) can still put its own attacker-chosen name in front of
+you this way, even though its body never does — `search` does not fetch or
+show the body of an excluded message. `thread` and `show` are read paths, not
+subject to this: `thread` excludes junk/trash replies by default (see the
+tools table above), and `show` reads a single message you already have the
+id for. This display-name leak in `search` is not fixed in this release.
 
 ## Troubleshooting
 
