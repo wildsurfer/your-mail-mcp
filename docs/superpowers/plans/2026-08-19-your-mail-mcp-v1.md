@@ -1501,9 +1501,10 @@ import (
 // something that pushes, and a stray blank line cannot silently demote them to
 // global options.
 //
-// The password is written into the file. The file lives in a tmpfs inside the
-// container with mode 0600, so it is no more exposed than the environment it
-// came from.
+// The password is written into the file, which lives in a private temporary
+// directory at mode 0600 and is removed on exit. It is ordinary container
+// filesystem, not a tmpfs — the compose file mounts none — so its protection is
+// the mode and the container boundary.
 func genMbsyncrc(cfg *Config, maildir string) string {
 	var b strings.Builder
 	b.WriteString("# generated at startup; edits are discarded on restart\n")

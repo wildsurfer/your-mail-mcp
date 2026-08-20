@@ -121,7 +121,10 @@ the build static and decouples the binary from the installed notmuch version.
 ### Generated configuration
 
 The mbsync and notmuch configuration files are generated at startup from the
-accounts file into a tmpfs, rather than mounted from the host. One mbsync channel
+accounts file into a private temporary directory the process owns and removes
+on exit, rather than mounted from the host. That directory is ordinary
+container filesystem, not a tmpfs: the compose file mounts none, so the file's
+protection is its 0600 mode and the container boundary, nothing more. One mbsync channel
 per account. The four directives that constitute the read-only guarantee —
 `Sync Pull`, `Create Near`, `Remove None`, `Expunge None` — are therefore written
 by the program, per channel, and cannot be edited into something that pushes.
