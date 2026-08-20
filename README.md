@@ -245,20 +245,19 @@ sync failures are isolated per account — but it will show up here as a
 **Junk/trash exclusion, two different failure shapes:**
 
 - **"special-use discovery: account NAME: ..." in the container logs**
-  means the startup `LIST` for that account failed outright — the connect,
-  login, or `LIST` call itself errored (bad host, bad credentials, network
-  timeout). This is not fatal: the account still syncs, but that account
-  falls all the way back to a built-in list of common English folder names
-  (`junk`, `spam`, `trash`, `deleted messages`, `deleted items`, `bulk
-  mail`), matched case-insensitively against the last path component.
-- **A server that simply doesn't support RFC 6154 SPECIAL-USE logs
-  nothing.** `LIST` still succeeds, just without the attributes that mark a
-  mailbox as Junk or Trash, so the server silently falls back to the same
-  built-in name list — no error, no log line. The way to notice this is
-  `folders` showing nothing under "excluded from search" for that account.
+  means the startup connect, login, or `LIST` for that account failed
+  outright. On that failure there are no folder names to fall back to
+  matching against, so that account gets **nothing excluded at all** — not
+  even by the built-in English name list — until the connection problem is
+  fixed or `exclude_folders` is set for it by hand.
+- **No error line, but `folders` still shows nothing excluded** means the
+  `LIST` succeeded — the server just doesn't advertise `\Junk`/`\Trash`
+  attributes (no RFC 6154 SPECIAL-USE support) *and* its folder names don't
+  match the built-in English list (`junk`, `spam`, `trash`, `deleted
+  messages`, `deleted items`, `bulk mail`). This is the localised-mailbox
+  case — a German or French mailbox, for instance — and the fix is the same:
+  set `exclude_folders` by hand.
 
-Either way, if your junk folder has a different name — a non-English
-locale, or something the server just calls something else — set
-`exclude_folders` for that account explicitly in `accounts.json`, e.g.
-`"exclude_folders": ["Papierkorb"]`. It takes priority over both
-SPECIAL-USE and the built-in list.
+`exclude_folders` in `accounts.json`, e.g. `"exclude_folders":
+["Papierkorb"]`, takes priority over both SPECIAL-USE and the built-in list
+in every case.
