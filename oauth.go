@@ -6,6 +6,7 @@ import (
 	"crypto/subtle"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"html/template"
 	"net/http"
@@ -126,9 +127,23 @@ func randomToken() string {
 	return base64.RawURLEncoding.EncodeToString(b)
 }
 
+// maxRegisteredClients bounds unauthenticated dynamic client registration.
+// Without a cap, /register grows the state file (which lives on the index
+// volume, alongside the Xapian database) without bound, and every save()
+// runs under o.mu, the same lock validAccessToken takes on every MCP
+// request — so an unbounded flood of registrations also stalls ordinary
+// tool calls. A single-user deployment realistically registers a handful of
+// clients ever; this leaves generous room above that.
+const maxRegisteredClients = 500
+
+var errTooManyClients = errors.New("too many registered clients")
+
 func (o *oauthServer) registerClient(name string, redirects []string) (string, error) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
+	if len(o.state.Clients) >= maxRegisteredClients {
+		return "", errTooManyClients
+	}
 	id := randomToken()
 	o.state.Clients[id] = &oauthClient{ID: id, Name: name, RedirectURIs: redirects}
 	return id, o.save()
@@ -177,6 +192,10 @@ func (o *oauthServer) handleRegister(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	id, err := o.registerClient(req.ClientName, req.RedirectURIs)
+	if errors.Is(err, errTooManyClients) {
+		writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": "too_many_clients"})
+		return
+	}
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "server_error"})
 		return
@@ -321,6 +340,7 @@ func (o *oauthServer) handleAuthorize(w http.ResponseWriter, r *http.Request) {
 
 	given := r.Form.Get("passphrase")
 	if subtle.ConstantTimeCompare([]byte(given), []byte(o.passphrase)) != 1 {
+		fmt.Fprintf(os.Stderr, "oauth: failed passphrase attempt from %s\n", r.RemoteAddr)
 		// Held across the sleep so concurrent guesses queue up instead of
 		// all paying the delay at once: the guess rate is capped no matter
 		// how many requests arrive in parallel.

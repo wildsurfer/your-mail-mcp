@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -116,6 +117,30 @@ func TestRegisterCreatesAPublicClient(t *testing.T) {
 	}
 	if o.client(out.ClientID) == nil {
 		t.Error("client was not stored")
+	}
+}
+
+// TestRegisterRejectsPastCap covers I5: /register is unauthenticated by
+// necessity, and each registration appends to the state file and fsyncs it,
+// with no cap and no rate limit — an unbounded flood grows a file on the
+// same volume as the Xapian index and stalls every authenticated request
+// behind the write lock (the same o.mu validAccessToken takes).
+func TestRegisterRejectsPastCap(t *testing.T) {
+	o := testOAuth(t)
+	body := `{"client_name":"x","redirect_uris":["https://claude.ai/api/mcp/auth_callback"]}`
+
+	for i := 0; i < maxRegisteredClients; i++ {
+		rec := httptest.NewRecorder()
+		o.handleRegister(rec, httptest.NewRequest(http.MethodPost, "/register", strings.NewReader(body)))
+		if rec.Code != http.StatusCreated {
+			t.Fatalf("registration %d: status = %d, want 201", i, rec.Code)
+		}
+	}
+
+	rec := httptest.NewRecorder()
+	o.handleRegister(rec, httptest.NewRequest(http.MethodPost, "/register", strings.NewReader(body)))
+	if rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("registration past the cap: status = %d, want 429", rec.Code)
 	}
 }
 
@@ -280,6 +305,45 @@ func TestAuthorizeIssuesACodeOnlyWithThePassphrase(t *testing.T) {
 	}
 	if loc.Query().Get("state") != "xyz" {
 		t.Error("state was not echoed back")
+	}
+}
+
+// TestFailedPassphraseIsLogged covers M6: a sustained guessing run against
+// an internet-exposed deployment was invisible to the operator, since a
+// wrong passphrase was silently re-rendered with nothing written anywhere.
+func TestFailedPassphraseIsLogged(t *testing.T) {
+	o := testOAuth(t)
+	o.failDelay = 0
+	id := registeredClient(t, o)
+
+	form := url.Values{
+		"response_type":         {"code"},
+		"client_id":             {id},
+		"redirect_uri":          {"https://claude.ai/api/mcp/auth_callback"},
+		"code_challenge":        {"E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM"},
+		"code_challenge_method": {"S256"},
+		"passphrase":            {"wrong"},
+	}
+	req := httptest.NewRequest(http.MethodPost, "/authorize", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.RemoteAddr = "203.0.113.5:12345"
+
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := os.Stderr
+	os.Stderr = w
+	o.handleAuthorize(httptest.NewRecorder(), req)
+	w.Close()
+	os.Stderr = old
+
+	out, err := io.ReadAll(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(out), "203.0.113.5") {
+		t.Errorf("a failed passphrase attempt was not logged with the remote address: %s", out)
 	}
 }
 
