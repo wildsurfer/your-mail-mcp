@@ -3345,7 +3345,12 @@ func (o *oauthServer) grantRefresh(w http.ResponseWriter, r *http.Request) {
 
 	o.mu.Lock()
 	rt, ok := o.state.Refresh[presented]
-	if ok {
+	// Validate the client BEFORE deleting: deleting first burns a valid token
+	// on a mismatched client_id and issues nothing in its place, locking the
+	// owner out of their own server.
+	if ok && r.Form.Get("client_id") != "" && r.Form.Get("client_id") != rt.ClientID {
+		ok = false
+	} else if ok {
 		// Rotation: the presented token dies in the same response that issues
 		// its replacement, which OAuth 2.1 requires for public clients.
 		delete(o.state.Refresh, presented)
@@ -3353,7 +3358,7 @@ func (o *oauthServer) grantRefresh(w http.ResponseWriter, r *http.Request) {
 	}
 	o.mu.Unlock()
 
-	if !ok || (r.Form.Get("client_id") != "" && r.Form.Get("client_id") != rt.ClientID) {
+	if !ok {
 		tokenError(w, "invalid_grant")
 		return
 	}
