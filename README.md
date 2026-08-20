@@ -59,9 +59,9 @@ account at startup to find each account's junk and trash folders (see
 That connection logs in, lists mailboxes, and logs out. It never selects a
 mailbox and never fetches a message.
 
-There is no send, no delete, no move, and no tag. There is no attachment
-export; attachments are listed by filename, media type and size in `show` and
-`thread`, but never served. Nothing in the process holds write access to any
+There is no send, no delete, no move, and no tag. Attachments are listed in
+`show` and `thread` and served read-only by the `attachment` tool, one part at
+a time, capped at 5MB. Nothing in the process holds write access to any
 account.
 
 Nine tools, all read-only:
@@ -77,6 +77,7 @@ Nine tools, all read-only:
 | `text` | Return the plain-text body of one message, converting HTML. |
 | `folders` | List accounts, their folders, index tags, and each account's last sync and last error. |
 | `refresh` | Sync INBOX now and report how many messages arrived. |
+| `attachment` | One attachment or MIME part of a message, by part number from `show`. Images and binaries as typed content, text as a marked block, 5MB cap. |
 
 `search`, `ids`, `files` and `count` take a notmuch query (`from:`, `to:`,
 `subject:`, `tag:`, `folder:`, `date:2026-01-01..2026-06-30`, combined with

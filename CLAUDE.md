@@ -11,7 +11,7 @@ against real tools is in `docs/reviews/`.
 
 ## Status
 
-v1 is implemented: nine read tools, multi-account sync, SPECIAL-USE junk
+v1 is implemented: ten read tools, multi-account sync, SPECIAL-USE junk
 discovery, OAuth with dynamic client registration, and a container image.
 
 Not verified against a real mail account yet. See "Before trusting it" below.
@@ -28,11 +28,14 @@ without changing the spec first.
 - **The only IMAP operation in Go code is `LIST`**, used once per account to find
   the junk and trash folders. It never selects a mailbox and never fetches a
   message, and the client object does not escape the function that opens it.
-- **Every byte of mail content reaching the model passes through `render()`.**
-  `page()` in `mcp.go` is the only place that constructs tool content. No tool
-  formats content itself. `render` also neutralises any occurrence of the
-  marker sentinel in the payload, so mail cannot forge the untrusted-content
-  wrapper.
+- **Every byte of mail text reaching the model passes through `render()`.**
+  `page()` in `mcp.go` is the only place that constructs text content, and
+  `render` neutralises the marker sentinel so mail cannot forge the
+  untrusted-content wrapper. The one deliberate exception is binary
+  attachment parts: text cannot mark pixels, so the `attachment` tool returns
+  images and binaries as typed MCP content whose schema names them
+  attacker-authored, capped at 5MB. Text parts, text attachments included,
+  still pass through `render`.
 - **Junk and trash are excluded from search by default**, discovered per account
   through RFC 6154 SPECIAL-USE so it works whatever the folders are named and in
   whatever language.
@@ -66,7 +69,7 @@ without changing the spec first.
 | Path | What |
 |---|---|
 | `main.go` | environment, accounts file, wiring, tickers, HTTP handler, bearer check |
-| `mcp.go` | the nine tools, `render()` chokepoint, query building, exclusions |
+| `mcp.go` | the ten tools, `render()` chokepoint, query building, exclusions |
 | `notmuch.go` | executing notmuch, query validation, account scoping |
 | `sync.go` | generated configs, mbsync, sync mutex, guards, SPECIAL-USE discovery |
 | `oauth.go` | authorization-server endpoints and the client/token store |

@@ -193,8 +193,8 @@ func TestLive(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(tools.Tools) != 9 {
-		t.Errorf("tool count = %d, want 9", len(tools.Tools))
+	if len(tools.Tools) != 10 {
+		t.Errorf("tool count = %d, want 10", len(tools.Tools))
 	}
 
 	if out := call("search", map[string]any{"query": "deployment"}); !strings.Contains(out, "deployment window") {

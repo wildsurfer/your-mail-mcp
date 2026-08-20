@@ -294,8 +294,14 @@ successful sync and its last error. A broken account is therefore visible withou
 reading logs. The reference `mailq` returned tags alone under this name, which
 answers nothing when the layout is unknown.
 
-Attachments are listed by filename, media type and size. They are not served, and
-no export path exists in the process.
+Attachments are listed by filename, media type and size in `show` and `thread`,
+and served one part at a time by the `attachment` tool. Serving was excluded
+from the first release; it was added after real use showed the listing alone
+answers no question a reader actually has. The risks the exclusion guarded are
+handled structurally instead: a 5MB cap bounds the context cost, and binary
+parts, which cannot carry the text markers, return as typed image or blob
+content whose tool schema names them attacker-authored data. Text parts pass
+through `render` like all other mail text.
 
 ## 4. Authentication
 

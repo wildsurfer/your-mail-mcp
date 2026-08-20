@@ -1,7 +1,9 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
 	"errors"
 	"os"
 	"os/exec"
@@ -821,5 +823,73 @@ func TestRefreshReportsBusyWithoutFailing(t *testing.T) {
 	}
 	if !strings.Contains(resultText(t, res), "already running") {
 		t.Errorf("busy message missing: %s", resultText(t, res))
+	}
+}
+
+// a 1x1 red PNG, the smallest real image a fixture can carry
+const tinyPNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/q842iQAAAABJRU5ErkJggg=="
+
+func attachmentFixture(t *testing.T) *Server {
+	t.Helper()
+	msg := "From: a@example.com\r\nTo: me@work\r\nSubject: photo\r\nMessage-ID: <att1@example.com>\r\n" +
+		"Date: Tue, 18 Aug 2026 10:00:00 +0000\r\nMIME-Version: 1.0\r\n" +
+		"Content-Type: multipart/mixed; boundary=B\r\n\r\n" +
+		"--B\r\nContent-Type: text/plain\r\n\r\nsee attached\r\n" +
+		"--B\r\nContent-Type: image/png\r\nContent-Disposition: attachment; filename=dot.png\r\n" +
+		"Content-Transfer-Encoding: base64\r\n\r\n" + tinyPNG + "\r\n--B--\r\n"
+	maildir, _, config := newFixture(t, map[string][]string{"work/INBOX": {msg}})
+	return newServer(&Config{Accounts: []Account{{Name: "work"}}}, newNotmuch(config), maildir)
+}
+
+func TestAttachmentReturnsTypedImage(t *testing.T) {
+	s := attachmentFixture(t)
+	// find the png's part number from show, as a client would
+	res, _, err := s.showTool(context.Background(), nil, idArgs{ID: "att1@example.com"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(resultText(t, res), "image/png") {
+		t.Fatal("show does not list the image part")
+	}
+	// the png is part 3 in this structure (1=multipart, 2=text, 3=image)
+	out, _, err := s.attachmentTool(context.Background(), nil, attachmentArgs{ID: "att1@example.com", Part: 3})
+	if err != nil {
+		t.Fatal(err)
+	}
+	img, ok := out.Content[0].(*mcp.ImageContent)
+	if !ok {
+		t.Fatalf("content is %T, want *mcp.ImageContent", out.Content[0])
+	}
+	if img.MIMEType != "image/png" {
+		t.Errorf("mime = %q", img.MIMEType)
+	}
+	want, _ := base64.StdEncoding.DecodeString(tinyPNG)
+	if !bytes.Equal(img.Data, want) {
+		t.Errorf("image bytes differ: got %d bytes, want %d", len(img.Data), len(want))
+	}
+}
+
+func TestAttachmentTextPartIsRendered(t *testing.T) {
+	s := attachmentFixture(t)
+	out, _, err := s.attachmentTool(context.Background(), nil, attachmentArgs{ID: "att1@example.com", Part: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := resultText(t, out)
+	if !strings.Contains(text, "see attached") || !strings.HasPrefix(text, untrustedOpen) {
+		t.Errorf("text part must pass through render: %q", text[:80])
+	}
+}
+
+func TestAttachmentRejectsBadParts(t *testing.T) {
+	s := attachmentFixture(t)
+	if _, _, err := s.attachmentTool(context.Background(), nil, attachmentArgs{ID: "att1@example.com", Part: 9}); err == nil {
+		t.Error("nonexistent part must error")
+	}
+	if _, _, err := s.attachmentTool(context.Background(), nil, attachmentArgs{ID: "att1@example.com", Part: 0}); err == nil {
+		t.Error("part 0 must error")
+	}
+	if _, _, err := s.attachmentTool(context.Background(), nil, attachmentArgs{ID: `x" or path:**`, Part: 1}); err == nil {
+		t.Error("injection in id must be rejected")
 	}
 }
