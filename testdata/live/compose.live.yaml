@@ -1,6 +1,8 @@
-# Overrides for the live end-to-end test. Run through `go test -tags live`,
-# never by hand against a production stack: the project name, ports and
-# volumes are all distinct so the two can coexist.
+# The live end-to-end stack, run through `go test -tags live`. Deliberately
+# self-contained rather than layered over the operator compose.yaml: override
+# merge semantics differ between compose versions (!override in particular),
+# and a file with no merging behaves identically everywhere. Paths are
+# relative to this file's directory.
 services:
   greenmail:
     image: greenmail/standalone:latest
@@ -11,17 +13,20 @@ services:
     ports:
       - "127.0.0.1:13025:3025"   # SMTP, for seeding from the test
   your-mail-mcp:
-    build: .
+    build: ../..
     depends_on:
       - greenmail
-    ports: !override
+    ports:
       - "127.0.0.1:18080:8080"
     environment:
       PUBLIC_URL: http://127.0.0.1:18080
       OAUTH_PASSPHRASE: live-test-passphrase
       LIVE_PASS: secret
       SYNC_INTERVAL: 5s
-    volumes: !override
-      - ./testdata/live/accounts.json:/config/accounts.json:ro
+    volumes:
+      - ./accounts.json:/config/accounts.json:ro
       - mail:/mail
       - index:/index
+volumes:
+  mail:
+  index:

@@ -35,7 +35,7 @@ const (
 
 func liveCompose(t *testing.T, args ...string) {
 	t.Helper()
-	full := append([]string{"compose", "-p", "ymm-live", "-f", "compose.yaml", "-f", "testdata/live/compose.live.yaml"}, args...)
+	full := append([]string{"compose", "-p", "ymm-live", "-f", "testdata/live/compose.live.yaml"}, args...)
 	cmd := exec.Command("docker", full...)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("docker %s: %v\n%s", strings.Join(full, " "), err, out)
@@ -115,7 +115,7 @@ func TestLive(t *testing.T) {
 		if t.Failed() {
 			// Teardown destroys the evidence, so capture it first.
 			out, _ := exec.Command("docker", "compose", "-p", "ymm-live",
-				"-f", "compose.yaml", "-f", "testdata/live/compose.live.yaml",
+				"-f", "testdata/live/compose.live.yaml",
 				"logs", "--tail", "40").CombinedOutput()
 			t.Logf("stack logs before teardown:\n%s", out)
 		}
