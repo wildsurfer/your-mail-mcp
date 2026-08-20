@@ -6,7 +6,7 @@ served over streamable HTTP behind an in-process OAuth 2.0 authorization server.
 
 This file is the briefing for anyone changing the code. `README.md` is for
 operators running it. The reasoning behind the design is in
-`docs/superpowers/specs/2026-08-19-your-mail-mcp-design.md`, and what was verified
+`docs/specs/2026-08-19-your-mail-mcp-design.md`, and what was verified
 against real tools is in `docs/reviews/`.
 
 ## Status
@@ -29,10 +29,10 @@ without changing the spec first.
   the junk and trash folders. It never selects a mailbox and never fetches a
   message, and the client object does not escape the function that opens it.
 - **Every byte of mail content reaching the model passes through `render()`.**
-  `text()` and `page()` in `mcp.go` are the only two places that construct tool
-  content. No tool formats content itself. `render` also neutralises any
-  occurrence of the marker sentinel in the payload, so mail cannot forge the
-  untrusted-content wrapper.
+  `page()` in `mcp.go` is the only place that constructs tool content. No tool
+  formats content itself. `render` also neutralises any occurrence of the
+  marker sentinel in the payload, so mail cannot forge the untrusted-content
+  wrapper.
 - **Junk and trash are excluded from search by default**, discovered per account
   through RFC 6154 SPECIAL-USE so it works whatever the folders are named and in
   whatever language.
@@ -41,6 +41,10 @@ without changing the spec first.
 
 ## Design decisions
 
+- **v1 is read-only; that is scope, not the product's final identity.** v2
+  intends draft composition behind a send gate built as a type — a
+  constructor that returns a refusing implementation when sending is off —
+  per the spec.
 - **Build, not adopt.** Every existing email MCP server is a live-IMAP server with
   a send path, which is the opposite of both choices above. See
   `docs/research/email-mcp-landscape.md`.
@@ -67,7 +71,7 @@ without changing the spec first.
 | `sync.go` | generated configs, mbsync, sync mutex, guards, SPECIAL-USE discovery |
 | `oauth.go` | authorization-server endpoints and the client/token store |
 | `.github/workflows/ci.yaml` | vet, unit and live tests on every PR; multi-arch image to GHCR on main and tags; release binaries on tags |
-| `docs/superpowers/specs/` | the design spec, which is the binding authority |
+| `docs/specs/` | the design spec, which is the binding authority |
 | `docs/reviews/` | what was verified against the real toolchain, and what was not |
 | `docs/research/` | the survey and provider research the design rests on |
 

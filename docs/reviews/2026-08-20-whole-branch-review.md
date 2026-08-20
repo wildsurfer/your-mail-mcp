@@ -1,7 +1,7 @@
 # Final whole-branch review — your-mail-mcp v1
 
 Branch `v1-implementation`, 37 commits, `db16cc8..bce9b41`.
-Reviewed 2026-08-20 against `docs/superpowers/specs/2026-08-19-your-mail-mcp-design.md`.
+Reviewed 2026-08-20 against `docs/specs/2026-08-19-your-mail-mcp-design.md`.
 
 ## Verdict
 
@@ -492,7 +492,7 @@ Fix-now means before this runs against a real mailbox.
 | T8 same for Patterns values | Later. Same reasoning. |
 | T10 ticker not joined before the runtime dir is removed | Later. POSIX unlink semantics cover it. |
 | T10 required-variable check iterates a map | Later. Cosmetic. |
-| T11 **manual: verify discovery against real Gmail and iCloud** | **Fix-now, and it is the single most important item on this list.** No agent could run it. Junk exclusion, the `[Gmail]/` prefix handling in `wellKnownJunk`, and whether mbsync's Verbatim layout produces the folder paths `excludedFolders` builds are all unverified against a real server. I3 makes the consequences of getting it wrong larger. |
+| T11 **manual: verify discovery against real Gmail and iCloud** | **Fix-now, and it is the single most important item on this list.** It needs real account credentials, which were not available here. Junk exclusion, the `[Gmail]/` prefix handling in `wellKnownJunk`, and whether mbsync's Verbatim layout produces the folder paths `excludedFolders` builds are all unverified against a real server. I3 makes the consequences of getting it wrong larger. |
 | T12 `${WORK_PASS}` works only because ExpandEnv precedes Unmarshal | Later, and see M4 which is the same code. |
 | T13 `client()` returns the stored pointer | Later. Read-only today. |
 | T14 bare 405 with no RFC-7591 error body | Later. |

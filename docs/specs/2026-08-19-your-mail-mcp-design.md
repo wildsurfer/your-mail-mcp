@@ -60,6 +60,7 @@ Process-level settings are environment variables:
 | `MAILDIR` | maildir root; each account gets a directory under it |
 | `INDEX` | notmuch/Xapian index directory |
 | `SYNC_INTERVAL` | full-sync period, default 5m |
+| `SYNC_TIMEOUT` | per-account deadline for one mbsync run, default 1h |
 | `OAUTH_PASSPHRASE` | the single passphrase gating consent |
 | `PUBLIC_URL` | external URL, used in OAuth metadata documents |
 | `LISTEN_ADDR` | address to bind, default `:8080` |
@@ -156,23 +157,46 @@ func (s *Server) sync(ctx context.Context, account, folder string) (added int, e
   account locks and parallel passes are the upgrade if a full pass gets slow.
 - **Empty-volume guard.** The question worth asking is the one the reference
   implementation asked of `/Volumes/2TB`: is the storage actually there? An empty
-  directory answers it only together with whether that directory is a mount point,
-  which the program determines by comparing its device number with its parent's.
+  directory answers it only together with two other signals.
 
-  A mounted volume that is empty is a genuine first run and syncs with no opt-in
-  and no marker file, so the shipped compose path has no initialisation step. An
-  empty *plain* directory is the ambiguous case — a fresh maildir and a path whose
-  volume was never mounted are indistinguishable — and only that case is refused,
-  because syncing into it re-downloads every account into a directory that vanishes
-  the moment the mount appears. `INIT_MIRROR=1` overrides it for an operator who
-  really does want an ordinary directory. A maildir that already holds anything is
-  an existing mirror and is never questioned.
+  The first is whether the directory is a mount point, which the program
+  determines by comparing its device number with its parent's. A mounted volume
+  that is empty is a genuine first run and syncs with no opt-in, so the shipped
+  compose path has no initialisation step. That check alone is not reliable
+  inside a container, though: a bind-mounted or named volume does not always
+  change device number from the container's point of view, so an actually
+  missing mail volume can still look mounted.
 
-  An earlier version of this spec used a marker file inside the maildir plus a
-  mandatory flag on first run. That threw away the signal: a marker inside the
-  volume cannot distinguish "never initialised" from "volume missing", so the flag
-  existed only to paper over the ambiguity, and every operator paid a two-step
-  first run for it.
+  The second signal is a sentinel file (`mirror-exists`) written into the
+  `INDEX` directory once a sync pass leaves the maildir non-empty. It lives in
+  `INDEX`, a separate volume from the maildir, specifically so it survives the
+  maildir vanishing: an empty maildir next to a sentinel that remembers a
+  previous mirror means the mail volume went missing, not that this is day one,
+  and the guard refuses regardless of what the mount-point check says. It is
+  checked first, being the stronger evidence of the two.
+
+  Only once both signals come back negative — no sentinel, and not a mount
+  point — does the remaining case get refused: a plain empty directory, equally
+  a fresh maildir and a path whose volume was never mounted, since syncing into
+  it re-downloads every account into a directory that vanishes the moment the
+  mount appears. `INIT_MIRROR=1` overrides all of this for an operator who
+  really does want to start over in an ordinary directory. A maildir that
+  already holds anything is an existing mirror and is never questioned.
+
+  Residual gap: if the maildir and the index vanish together — the whole data
+  volume gone, not just the mail one — the sentinel disappears with it and this
+  still reads as a first run. There is no signal left inside the container to
+  catch that case.
+
+  An earlier version of this spec used a marker file inside the maildir itself
+  plus a mandatory flag on every first run. That threw away the signal: a
+  marker inside the same volume it is meant to detect the loss of cannot
+  distinguish "never initialised" from "volume missing", so the flag existed
+  only to paper over the ambiguity, and every operator paid a two-step first
+  run for it. The sentinel above avoids that by living on the other side of the
+  volume boundary, in `INDEX` rather than in the maildir, and by being a second
+  signal alongside the mount-point check rather than a replacement for it, so a
+  genuine first run still needs no flag.
 
 - **Timeouts and throttling.** Every sync has a deadline. Provider throttling is
   logged and left for the next tick, never retried in a tight loop.
@@ -189,6 +213,14 @@ RFC 6154 attributes, caching which mailbox is `\Junk` and which is `\Trash`
 whatever its display name. Gmail and iCloud both advertise these. Servers that do
 not fall back to a built-in list of common English spellings, and past that to the
 account's `exclude_folders`.
+
+Each mailbox name is translated from the server's own hierarchy delimiter —
+which the `LIST` response for that mailbox carries, and which is server- and
+namespace-specific (Dovecot's `.`, as in `INBOX.Trash`, is the common
+non-`/` case) — to the `/` a maildir path and a `folder:` query both use. A
+name returned verbatim never matches what `SubFolders Verbatim` actually
+wrote to disk on such a server, so the translation runs before the name is
+cached or excluded.
 
 This is the one place an IMAP client exists in the process. Its consequences are
 stated in section 5.

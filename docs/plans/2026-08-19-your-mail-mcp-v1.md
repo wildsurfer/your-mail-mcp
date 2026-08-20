@@ -1,20 +1,20 @@
 # your-mail-mcp v1 Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
-
 **Goal:** Build a read-only MCP server that serves several IMAP accounts from a local notmuch index over authenticated HTTP, shipped as a container image.
 
 **Architecture:** One Go process holds an HTTP server and a sync ticker. mbsync mirrors each account into `$MAILDIR/<account>/` pull-only, notmuch indexes all of them into one database, and every tool call shells out to `notmuch` with JSON output. Authentication is OAuth 2.0 with Dynamic Client Registration, implemented in-process, gated by a single passphrase.
 
 **Tech Stack:** Go (stdlib plus two dependencies), `isync`/mbsync, notmuch, w3m, Debian-slim container.
 
-**Spec:** `docs/superpowers/specs/2026-08-19-your-mail-mcp-design.md`
+**Spec:** `docs/specs/2026-08-19-your-mail-mcp-design.md`
 
 > **This plan is a historical record of how v1 was built.** Where it and the
 > shipped code disagree, the code and the spec are right. In particular, Task 9's
-> maildir guard was later replaced: the marker file and the mandatory first-run
-> flag are gone, and the program compares device numbers to see whether the
-> maildir is a mount point instead.
+> maildir guard was later replaced: the mandatory first-run flag is gone, and
+> the program compares device numbers to see whether the maildir is a mount
+> point instead. A marker file returned after that, in a different shape and
+> location — see the spec's "Empty-volume guard" for why it does not repeat
+> the original mistake.
 
 ## Global Constraints
 
@@ -533,7 +533,7 @@ func TestNotmuchCountsAndScopes(t *testing.T) {
 		},
 	})
 	n := newNotmuch(config)
-	ctx := context.Background() // t.Context() is Go 1.24+; go.mod pins 1.23
+	ctx := context.Background() // t.Context() is Go 1.24+; go.mod now pins 1.27
 
 	total, err := n.count(ctx, "*")
 	if err != nil {
@@ -3704,12 +3704,12 @@ Expected: PASS, including the nine-tool count and the authenticated `count` call
 
 - [ ] **Step 5: Update the spec to match the deviation**
 
-Edit `docs/superpowers/specs/2026-08-19-your-mail-mcp-design.md`, section 4: replace the sentence about the SDK providing the resource-server half with a note that bearer verification, the 401 shape and both metadata documents are implemented directly, and why.
+Edit `docs/specs/2026-08-19-your-mail-mcp-design.md`, section 4: replace the sentence about the SDK providing the resource-server half with a note that bearer verification, the 401 shape and both metadata documents are implemented directly, and why.
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add main.go oauth.go e2e_test.go docs/superpowers/specs/2026-08-19-your-mail-mcp-design.md
+git add main.go oauth.go e2e_test.go docs/specs/2026-08-19-your-mail-mcp-design.md
 git commit -m "Serve MCP over authenticated streamable HTTP, with an end-to-end test"
 ```
 

@@ -16,7 +16,7 @@ and never fetches a message. The diagram source is
 
 ## What it cannot do
 
-This is read-only, by construction, not by convention.
+The read-only property is built into the architecture.
 
 The mirror is pull-only. The generated mbsync configuration for every account
 carries `Sync Pull`, `Create Near`, `Remove None`, `Expunge None` — nothing in
@@ -474,6 +474,7 @@ An account name must be unique. At least one account is required; an empty
 | `PUBLIC_URL` | yes | — | The external URL the server is reached at, exactly as a client will use it (a trailing slash, if any, is stripped). Used in OAuth metadata and must match what you type into the client. |
 | `OAUTH_PASSPHRASE` | yes | — | The one passphrase that gates the consent screen. |
 | `SYNC_INTERVAL` | no | `5m` | Full-sync period, as a Go duration (`5m`, `1h`). |
+| `SYNC_TIMEOUT` | no | `1h` | Per-account deadline for one mbsync run, as a Go duration. Raise it if a large first mirror is still running when it hits this and gets cut off — a mailbox in the tens of thousands of messages can take well over the default. |
 | `LISTEN_ADDR` | no | `:8080` | Address the HTTP server binds. |
 | `INIT_MIRROR` | no | unset | Set to `1` to sync into an empty directory that is not a mount point. Not needed with compose, where `/mail` is a volume. |
 
@@ -497,10 +498,15 @@ those first — `brew install isync notmuch w3m` on macOS,
 `apt install isync notmuch w3m` on Debian and Ubuntu. isync 1.4.4 or newer
 works.
 
-Then the same configuration as the container, with paths of your choosing:
+Then the same configuration as the container, with paths of your choosing.
+The container's volumes start out as mount points, which the empty-maildir
+guard reads as a genuine first run; a plain directory you create yourself
+looks exactly like a missing volume to that same guard, so it needs
+`INIT_MIRROR=1` to say it really is meant to be a first run here:
 
 ```bash
-CONFIG=./accounts.json MAILDIR=./mail INDEX=./index \
+mkdir -p mail index
+CONFIG=./accounts.json MAILDIR=./mail INDEX=./index INIT_MIRROR=1 \
 PUBLIC_URL=http://127.0.0.1:8080 OAUTH_PASSPHRASE=... \
 WORK_PASS=... ./your-mail-mcp
 ```
@@ -517,7 +523,10 @@ the tests).
 
 ## Provider notes
 
-These were confirmed against real accounts while building this server.
+The iCloud notes come from long-running operation of a real iCloud mirror
+that predates this server. The Gmail and Dovecot notes come from provider
+documentation and the project's research, and have not all been re-verified
+through this server yet.
 
 - **iCloud** (`imap.mail.me.com`): the IMAP `user` is the short name — the
   part before `@icloud.com` — not the full email address. iCloud throttles
