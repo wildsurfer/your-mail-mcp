@@ -1,5 +1,35 @@
 # your-mail-mcp
 
+Your mail already holds the answers: booking references, gate codes,
+invoices, warranty periods, promises people made in writing. This server lets
+your AI assistant find them.
+
+**Ask it things like:**
+
+- "Find the booking reference for the June ferry."
+- "What was the wifi password the hotel sent last summer?"
+- "What did the accountant answer about VAT, and when?"
+- "Collect everything between me and the builder about the roof, in order,
+  and summarize who promised what."
+- "What arrived this morning, across all my accounts, that actually needs me?"
+
+**Use it for:**
+
+- **Search that understands questions.** Full-text search over your entire
+  history, every account in one index, phrased the way you think instead of
+  the way search syntax works.
+- **Triage from your phone.** A morning summary of what came in overnight,
+  with junk already filtered out, from wherever you are.
+- **Mail as context for other work.** Pull the client's requirements out of
+  the thread and into your coding or writing session, instead of retyping
+  them.
+- **Agents you can leave running.** The server can only read. A malicious
+  email that reaches your assistant gets read and nothing more, because
+  sending, deleting and moving do not exist here. That makes scheduled
+  digests and always-on agents a calm thing to run.
+
+Setup is two files and `docker compose up -d` — see [Running it](#running-it).
+
 A self-hosted MCP server that gives an MCP client (Claude, or any other client
 that speaks streamable HTTP MCP with OAuth) read access to your mail. It
 mirrors one or more IMAP accounts into a local maildir with
