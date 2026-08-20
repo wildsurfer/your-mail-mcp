@@ -247,18 +247,23 @@ the supported path across every surface, and rules out a machine-to-machine
 token via `static_headers` exists but is beta and administrator-scoped, so it is
 not the basis for v1.
 
-The Go SDK's `auth` package provides the resource-server half: `RequireBearerToken`
-middleware, an RFC 9728 protected-resource metadata handler, and correctly formed
-401 responses. The authorization-server half is ours.
+The resource-server half is implemented directly rather than through the Go SDK's
+`auth` package: bearer verification, the 401 shape and both metadata documents are
+about twenty lines of standard library (`requireBearer` and `handlePRMetadata` in
+`main.go`/`oauth.go`). The 401 shape and the `resource` field are the two things
+Claude's connector flow is most sensitive to, and writing them directly keeps them
+visible and free of version coupling to the SDK's `auth` package. The SDK is still
+used for MCP itself. The authorization-server half is ours, as before.
 
 ```
-GET  /.well-known/oauth-protected-resource    SDK handler, RFC 9728
-GET  /.well-known/oauth-authorization-server  RFC 8414 metadata
-POST /register                                DCR, RFC 7591, JSON body
-GET  /authorize                               passphrase form and consent
-POST /authorize                               verify, issue authorization code
-POST /token                                   code and refresh grants, form-urlencoded
-POST /mcp                                     protected by RequireBearerToken
+GET  /.well-known/oauth-protected-resource     handlePRMetadata, RFC 9728
+GET  /.well-known/oauth-protected-resource/mcp handlePRMetadata, path variant Claude probes first
+GET  /.well-known/oauth-authorization-server   RFC 8414 metadata
+POST /register                                 DCR, RFC 7591, JSON body
+GET  /authorize                                passphrase form and consent
+POST /authorize                                verify, issue authorization code
+POST /token                                    code and refresh grants, form-urlencoded
+POST /mcp                                      protected by requireBearer
 ```
 
 Requirements taken directly from the documentation, all mandatory:

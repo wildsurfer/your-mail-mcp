@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -221,9 +222,59 @@ func run() error {
 		}
 	})
 
+	o, err := newOAuth(filepath.Join(e.Index, "oauth.json"), e.PublicURL, e.Passphrase)
+	if err != nil {
+		return err
+	}
 	m := mcp.NewServer(&mcp.Implementation{Name: "your-mail-mcp", Version: "0.1.0"}, nil)
 	srv.registerTools(m)
-	// Stdio here is a development harness. The shipped transport is HTTP and
-	// arrives in Task 17.
-	return m.Run(ctx, &mcp.StdioTransport{})
+
+	httpSrv := &http.Server{
+		Addr:              e.ListenAddr,
+		Handler:           newHTTPHandler(srv, o, m),
+		ReadHeaderTimeout: 10 * time.Second,
+	}
+	go func() {
+		<-ctx.Done()
+		shutdown, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		_ = httpSrv.Shutdown(shutdown)
+	}()
+	fmt.Fprintf(os.Stderr, "listening on %s\n", e.ListenAddr)
+	if err := httpSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		return err
+	}
+	return nil
+}
+
+// requireBearer refuses anything without a live access token. The 401 carries a
+// resource_metadata pointer: Claude does not honour that header on a 200, and
+// without it the client has to probe for the metadata, which costs round trips
+// and fails outright on hosts that do not serve /.well-known paths.
+func requireBearer(o *oauthServer, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		token := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+		if token == "" || token == r.Header.Get("Authorization") || !o.validAccessToken(token) {
+			w.Header().Set("WWW-Authenticate",
+				fmt.Sprintf("Bearer resource_metadata=%q", o.publicURL+"/.well-known/oauth-protected-resource"))
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+func newHTTPHandler(srv *Server, o *oauthServer, m *mcp.Server) http.Handler {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/.well-known/oauth-authorization-server", o.handleASMetadata)
+	mux.HandleFunc("/.well-known/oauth-protected-resource", o.handlePRMetadata)
+	// Claude probes this path variant before the bare one.
+	mux.HandleFunc("/.well-known/oauth-protected-resource/mcp", o.handlePRMetadata)
+	mux.HandleFunc("/register", o.handleRegister)
+	mux.HandleFunc("/authorize", o.handleAuthorize)
+	mux.HandleFunc("/token", o.handleToken)
+
+	streamable := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return m }, nil)
+	mux.Handle("/mcp", requireBearer(o, streamable))
+	return mux
 }

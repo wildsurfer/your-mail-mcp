@@ -466,6 +466,16 @@ func (o *oauthServer) issue(w http.ResponseWriter, clientID string) {
 	})
 }
 
+func (o *oauthServer) handlePRMetadata(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]any{
+		// Must match the URL the user types into Claude, path included.
+		"resource":                 o.publicURL + "/mcp",
+		"authorization_servers":    []string{o.publicURL},
+		"scopes_supported":         []string{"mail.read"},
+		"bearer_methods_supported": []string{"header"},
+	})
+}
+
 func (o *oauthServer) validAccessToken(token string) bool {
 	o.mu.Lock()
 	defer o.mu.Unlock()
