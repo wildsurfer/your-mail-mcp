@@ -2,6 +2,7 @@ package main
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/base64"
 	"encoding/json"
@@ -43,6 +44,12 @@ type oauthServer struct {
 	publicURL  string
 	passphrase string
 	failDelay  time.Duration
+
+	// failMu serialises the failed-passphrase path in handleAuthorize. It is
+	// separate from mu so that a run of wrong guesses cannot block real
+	// traffic, but concurrent guesses still queue behind the delay instead
+	// of all paying it in parallel.
+	failMu sync.Mutex
 
 	mu    sync.Mutex
 	state oauthState
@@ -314,7 +321,12 @@ func (o *oauthServer) handleAuthorize(w http.ResponseWriter, r *http.Request) {
 
 	given := r.Form.Get("passphrase")
 	if subtle.ConstantTimeCompare([]byte(given), []byte(o.passphrase)) != 1 {
-		time.Sleep(o.failDelay) // blunt the value of guessing repeatedly
+		// Held across the sleep so concurrent guesses queue up instead of
+		// all paying the delay at once: the guess rate is capped no matter
+		// how many requests arrive in parallel.
+		o.failMu.Lock()
+		time.Sleep(o.failDelay)
+		o.failMu.Unlock()
 		data.Failed = true
 		w.WriteHeader(http.StatusUnauthorized)
 		_ = consentPage.Execute(w, data)
@@ -334,4 +346,123 @@ func (o *oauthServer) handleAuthorize(w http.ResponseWriter, r *http.Request) {
 	}
 	u.RawQuery = q.Encode()
 	http.Redirect(w, r, u.String(), http.StatusFound)
+}
+
+const accessTTL = time.Hour
+
+func tokenError(w http.ResponseWriter, code string) {
+	// RFC 6749 error codes, not custom ones: clients key their refresh
+	// behaviour off invalid_grant specifically.
+	writeJSON(w, http.StatusBadRequest, map[string]string{"error": code})
+}
+
+func (o *oauthServer) handleToken(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	// The token endpoint is form-encoded; registration is JSON. A JSON-only
+	// body parser here returns 415 and breaks the flow.
+	if err := r.ParseForm(); err != nil {
+		tokenError(w, "invalid_request")
+		return
+	}
+	switch r.Form.Get("grant_type") {
+	case "authorization_code":
+		o.grantCode(w, r)
+	case "refresh_token":
+		o.grantRefresh(w, r)
+	default:
+		tokenError(w, "unsupported_grant_type")
+	}
+}
+
+func (o *oauthServer) grantCode(w http.ResponseWriter, r *http.Request) {
+	code := r.Form.Get("code")
+
+	o.mu.Lock()
+	ac, ok := o.codes[code]
+	delete(o.codes, code) // single use: dead on first attempt, whatever the outcome
+	o.mu.Unlock()
+
+	if !ok || time.Now().After(ac.expires) {
+		tokenError(w, "invalid_grant")
+		return
+	}
+	if ac.clientID != r.Form.Get("client_id") || ac.redirect != r.Form.Get("redirect_uri") {
+		tokenError(w, "invalid_grant")
+		return
+	}
+	sum := sha256.Sum256([]byte(r.Form.Get("code_verifier")))
+	if base64.RawURLEncoding.EncodeToString(sum[:]) != ac.challenge {
+		tokenError(w, "invalid_grant")
+		return
+	}
+	o.issue(w, ac.clientID)
+}
+
+func (o *oauthServer) grantRefresh(w http.ResponseWriter, r *http.Request) {
+	presented := r.Form.Get("refresh_token")
+	clientID := r.Form.Get("client_id")
+
+	o.mu.Lock()
+	rt, ok := o.state.Refresh[presented]
+	// A wrong client_id must not consume a token that is otherwise valid:
+	// unlike an authorization code, the refresh token itself is the secret,
+	// so a mismatched client_id here proves nothing worth burning it over,
+	// and doing so would let a stray or mistaken client_id deny the
+	// rightful holder its next refresh.
+	if ok && clientID != "" && clientID != rt.ClientID {
+		ok = false
+	}
+	if ok {
+		// Rotation: the presented token dies in the same response that
+		// issues its replacement, which OAuth 2.1 requires for public
+		// clients.
+		delete(o.state.Refresh, presented)
+		_ = o.save()
+	}
+	o.mu.Unlock()
+
+	if !ok {
+		tokenError(w, "invalid_grant")
+		return
+	}
+	o.issue(w, rt.ClientID)
+}
+
+func (o *oauthServer) issue(w http.ResponseWriter, clientID string) {
+	access, refresh := randomToken(), randomToken()
+
+	o.mu.Lock()
+	o.access[access] = time.Now().Add(accessTTL)
+	o.state.Refresh[refresh] = &refreshToken{ClientID: clientID, Issued: time.Now()}
+	err := o.save()
+	o.mu.Unlock()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "server_error"})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"access_token":  access,
+		"token_type":    "Bearer",
+		"expires_in":    int(accessTTL.Seconds()),
+		"refresh_token": refresh,
+		"scope":         "mail.read",
+	})
+}
+
+func (o *oauthServer) validAccessToken(token string) bool {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	exp, ok := o.access[token]
+	if !ok {
+		return false
+	}
+	if time.Now().After(exp) {
+		delete(o.access, token)
+		return false
+	}
+	return true
 }

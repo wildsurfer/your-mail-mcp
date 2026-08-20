@@ -1,6 +1,8 @@
 package main
 
 import (
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -8,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func testOAuth(t *testing.T) *oauthServer {
@@ -414,5 +417,334 @@ func TestAuthorizeConsentPageCannotBeFramed(t *testing.T) {
 	o.handleAuthorize(rec, httptest.NewRequest(http.MethodGet, authorizeURL(id), nil))
 	if got := rec.Header().Get("X-Frame-Options"); got != "DENY" {
 		t.Errorf("X-Frame-Options = %q, want DENY", got)
+	}
+}
+
+const verifier = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"
+
+func challengeFor(v string) string {
+	sum := sha256.Sum256([]byte(v))
+	return base64.RawURLEncoding.EncodeToString(sum[:])
+}
+
+// issueCode drives the authorize endpoint and returns the code it produced.
+func issueCode(t *testing.T, o *oauthServer, clientID string) string {
+	t.Helper()
+	form := url.Values{
+		"response_type":         {"code"},
+		"client_id":             {clientID},
+		"redirect_uri":          {"https://claude.ai/api/mcp/auth_callback"},
+		"code_challenge":        {challengeFor(verifier)},
+		"code_challenge_method": {"S256"},
+		"passphrase":            {"hunter2"},
+	}
+	req := httptest.NewRequest(http.MethodPost, "/authorize", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rec := httptest.NewRecorder()
+	o.handleAuthorize(rec, req)
+	if rec.Code != http.StatusFound {
+		t.Fatalf("authorize status = %d", rec.Code)
+	}
+	loc, err := url.Parse(rec.Header().Get("Location"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return loc.Query().Get("code")
+}
+
+func postToken(t *testing.T, o *oauthServer, form url.Values) (int, map[string]any) {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodPost, "/token", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rec := httptest.NewRecorder()
+	o.handleToken(rec, req)
+	var out map[string]any
+	_ = json.Unmarshal(rec.Body.Bytes(), &out)
+	return rec.Code, out
+}
+
+func TestTokenExchangeAndRefreshRotation(t *testing.T) {
+	o := testOAuth(t)
+	o.failDelay = 0
+	id := registeredClient(t, o)
+	code := issueCode(t, o, id)
+
+	status, out := postToken(t, o, url.Values{
+		"grant_type":    {"authorization_code"},
+		"code":          {code},
+		"client_id":     {id},
+		"redirect_uri":  {"https://claude.ai/api/mcp/auth_callback"},
+		"code_verifier": {verifier},
+	})
+	if status != http.StatusOK {
+		t.Fatalf("token status = %d, body = %v", status, out)
+	}
+	access, _ := out["access_token"].(string)
+	refresh, _ := out["refresh_token"].(string)
+	if access == "" || refresh == "" {
+		t.Fatalf("missing tokens: %v", out)
+	}
+	if !o.validAccessToken(access) {
+		t.Error("the issued access token does not validate")
+	}
+
+	// A code is single use.
+	status, out = postToken(t, o, url.Values{
+		"grant_type":    {"authorization_code"},
+		"code":          {code},
+		"client_id":     {id},
+		"redirect_uri":  {"https://claude.ai/api/mcp/auth_callback"},
+		"code_verifier": {verifier},
+	})
+	if status != http.StatusBadRequest || out["error"] != "invalid_grant" {
+		t.Errorf("replayed code: status %d, error %v; want 400 invalid_grant", status, out["error"])
+	}
+
+	// Refresh rotates: the new token works, the old one does not.
+	status, out = postToken(t, o, url.Values{
+		"grant_type":    {"refresh_token"},
+		"refresh_token": {refresh},
+		"client_id":     {id},
+	})
+	if status != http.StatusOK {
+		t.Fatalf("refresh status = %d, body = %v", status, out)
+	}
+	rotated, _ := out["refresh_token"].(string)
+	if rotated == "" || rotated == refresh {
+		t.Fatalf("refresh token was not rotated: %v", out)
+	}
+	status, out = postToken(t, o, url.Values{
+		"grant_type":    {"refresh_token"},
+		"refresh_token": {refresh},
+		"client_id":     {id},
+	})
+	if status != http.StatusBadRequest || out["error"] != "invalid_grant" {
+		t.Errorf("the old refresh token still works: status %d, %v", status, out)
+	}
+}
+
+func TestTokenRejectsAWrongVerifier(t *testing.T) {
+	o := testOAuth(t)
+	o.failDelay = 0
+	id := registeredClient(t, o)
+	code := issueCode(t, o, id)
+
+	status, out := postToken(t, o, url.Values{
+		"grant_type":    {"authorization_code"},
+		"code":          {code},
+		"client_id":     {id},
+		"redirect_uri":  {"https://claude.ai/api/mcp/auth_callback"},
+		"code_verifier": {"not-the-verifier"},
+	})
+	if status != http.StatusBadRequest || out["error"] != "invalid_grant" {
+		t.Fatalf("PKCE was not enforced: status %d, %v", status, out)
+	}
+}
+
+func TestTokenRejectsAnEmptyVerifier(t *testing.T) {
+	o := testOAuth(t)
+	o.failDelay = 0
+	id := registeredClient(t, o)
+	code := issueCode(t, o, id)
+
+	status, out := postToken(t, o, url.Values{
+		"grant_type":   {"authorization_code"},
+		"code":         {code},
+		"client_id":    {id},
+		"redirect_uri": {"https://claude.ai/api/mcp/auth_callback"},
+		// code_verifier omitted entirely
+	})
+	if status != http.StatusBadRequest || out["error"] != "invalid_grant" {
+		t.Fatalf("empty verifier: status %d, %v", status, out)
+	}
+}
+
+func TestTokenRejectsAnExpiredCode(t *testing.T) {
+	o := testOAuth(t)
+	o.failDelay = 0
+	id := registeredClient(t, o)
+	code := issueCode(t, o, id)
+
+	o.mu.Lock()
+	ac := o.codes[code]
+	ac.expires = time.Now().Add(-time.Second)
+	o.codes[code] = ac
+	o.mu.Unlock()
+
+	status, out := postToken(t, o, url.Values{
+		"grant_type":    {"authorization_code"},
+		"code":          {code},
+		"client_id":     {id},
+		"redirect_uri":  {"https://claude.ai/api/mcp/auth_callback"},
+		"code_verifier": {verifier},
+	})
+	if status != http.StatusBadRequest || out["error"] != "invalid_grant" {
+		t.Fatalf("expired code: status %d, %v", status, out)
+	}
+}
+
+// A code is scoped to the client that requested it. Presenting it with a
+// different (also registered) client_id must fail even with the right
+// verifier and redirect_uri: otherwise one client could redeem a code that
+// was never issued to it.
+func TestTokenRejectsCodeRedeemedByAnotherClient(t *testing.T) {
+	o := testOAuth(t)
+	o.failDelay = 0
+	id := registeredClient(t, o)
+	otherID := registeredClient(t, o)
+	code := issueCode(t, o, id)
+
+	status, out := postToken(t, o, url.Values{
+		"grant_type":    {"authorization_code"},
+		"code":          {code},
+		"client_id":     {otherID},
+		"redirect_uri":  {"https://claude.ai/api/mcp/auth_callback"},
+		"code_verifier": {verifier},
+	})
+	if status != http.StatusBadRequest || out["error"] != "invalid_grant" {
+		t.Fatalf("code redeemed by the wrong client: status %d, %v", status, out)
+	}
+}
+
+// A code must not survive a failed exchange attempt. If a wrong verifier
+// left the code alive, an attacker holding a stolen code could try
+// verifiers one at a time until one worked; deleting on first use, whatever
+// the outcome, forecloses that.
+func TestTokenFailedExchangeConsumesTheCode(t *testing.T) {
+	o := testOAuth(t)
+	o.failDelay = 0
+	id := registeredClient(t, o)
+	code := issueCode(t, o, id)
+
+	status, out := postToken(t, o, url.Values{
+		"grant_type":    {"authorization_code"},
+		"code":          {code},
+		"client_id":     {id},
+		"redirect_uri":  {"https://claude.ai/api/mcp/auth_callback"},
+		"code_verifier": {"not-the-verifier"},
+	})
+	if status != http.StatusBadRequest || out["error"] != "invalid_grant" {
+		t.Fatalf("wrong verifier: status %d, %v", status, out)
+	}
+
+	status, out = postToken(t, o, url.Values{
+		"grant_type":    {"authorization_code"},
+		"code":          {code},
+		"client_id":     {id},
+		"redirect_uri":  {"https://claude.ai/api/mcp/auth_callback"},
+		"code_verifier": {verifier},
+	})
+	if status != http.StatusBadRequest || out["error"] != "invalid_grant" {
+		t.Errorf("a code survived a failed exchange attempt: status %d, %v", status, out)
+	}
+}
+
+// A refresh token belongs to whichever client it was issued to, but a
+// public client may not resend client_id on refresh. Omitting it entirely
+// must still work: the refresh token itself is the secret here.
+func TestTokenRefreshWithNoClientIDSucceeds(t *testing.T) {
+	o := testOAuth(t)
+	o.failDelay = 0
+	id := registeredClient(t, o)
+	code := issueCode(t, o, id)
+
+	_, out := postToken(t, o, url.Values{
+		"grant_type":    {"authorization_code"},
+		"code":          {code},
+		"client_id":     {id},
+		"redirect_uri":  {"https://claude.ai/api/mcp/auth_callback"},
+		"code_verifier": {verifier},
+	})
+	refresh, _ := out["refresh_token"].(string)
+	if refresh == "" {
+		t.Fatalf("no refresh token issued: %v", out)
+	}
+
+	status, out := postToken(t, o, url.Values{
+		"grant_type":    {"refresh_token"},
+		"refresh_token": {refresh},
+	})
+	if status != http.StatusOK {
+		t.Fatalf("refresh without client_id: status %d, %v", status, out)
+	}
+}
+
+// A wrong client_id on an otherwise-valid refresh token must be rejected,
+// but must not destroy the token: nothing about presenting a wrong
+// client_id proves the caller does not also hold the right one, and
+// burning the token on that attempt would let anyone who intercepts (or
+// simply mistypes) a client_id deny the rightful client its refresh.
+func TestTokenRefreshWithWrongClientIDDoesNotBurnTheToken(t *testing.T) {
+	o := testOAuth(t)
+	o.failDelay = 0
+	id := registeredClient(t, o)
+	otherID := registeredClient(t, o)
+	code := issueCode(t, o, id)
+
+	_, out := postToken(t, o, url.Values{
+		"grant_type":    {"authorization_code"},
+		"code":          {code},
+		"client_id":     {id},
+		"redirect_uri":  {"https://claude.ai/api/mcp/auth_callback"},
+		"code_verifier": {verifier},
+	})
+	refresh, _ := out["refresh_token"].(string)
+
+	status, out := postToken(t, o, url.Values{
+		"grant_type":    {"refresh_token"},
+		"refresh_token": {refresh},
+		"client_id":     {otherID},
+	})
+	if status != http.StatusBadRequest || out["error"] != "invalid_grant" {
+		t.Fatalf("wrong client_id: status %d, %v", status, out)
+	}
+
+	status, out = postToken(t, o, url.Values{
+		"grant_type":    {"refresh_token"},
+		"refresh_token": {refresh},
+		"client_id":     {id},
+	})
+	if status != http.StatusOK {
+		t.Errorf("a wrong client_id on one attempt burned a valid refresh token: status %d, %v", status, out)
+	}
+}
+
+// Two failed passphrase attempts arriving at the same time must not both
+// pay the delay concurrently: that would let an attacker guess at a rate
+// bounded only by however many requests it can fire in parallel. A
+// dedicated mutex held across the delay forces them to queue, so the wall
+// time for both to finish is at least two delays.
+func TestAuthorizeSerializesFailedPassphraseAttempts(t *testing.T) {
+	o := testOAuth(t)
+	o.failDelay = 50 * time.Millisecond
+	id := registeredClient(t, o)
+
+	form := url.Values{
+		"response_type":         {"code"},
+		"client_id":             {id},
+		"redirect_uri":          {"https://claude.ai/api/mcp/auth_callback"},
+		"code_challenge":        {"E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM"},
+		"code_challenge_method": {"S256"},
+		"passphrase":            {"wrong"},
+	}
+
+	attempt := func(done chan<- struct{}) {
+		req := httptest.NewRequest(http.MethodPost, "/authorize", strings.NewReader(form.Encode()))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		rec := httptest.NewRecorder()
+		o.handleAuthorize(rec, req)
+		close(done)
+	}
+
+	start := time.Now()
+	done1, done2 := make(chan struct{}), make(chan struct{})
+	go attempt(done1)
+	go attempt(done2)
+	<-done1
+	<-done2
+	elapsed := time.Since(start)
+
+	if elapsed < 2*o.failDelay {
+		t.Errorf("two concurrent wrong-passphrase attempts finished in %v, want at least %v (serialized)", elapsed, 2*o.failDelay)
 	}
 }
