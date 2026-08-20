@@ -448,6 +448,14 @@ func discoverSpecialUse(ctx context.Context, a Account) (special, all []string, 
 	}
 	boxes, err := c.List("", "*", &imap.ListOptions{ReturnSpecialUse: true}).Collect()
 	if err != nil {
+		// iCloud advertises SPECIAL-USE yet rejects the LIST-EXTENDED RETURN
+		// syntax with a parse error (observed live, 2026-08-20). A plain LIST
+		// still carries the special-use attributes on servers implementing
+		// RFC 6154 without LIST-EXTENDED, and even a bare mailbox list feeds
+		// the name fallback, so retry once without the option.
+		boxes, err = c.List("", "*", nil).Collect()
+	}
+	if err != nil {
 		return nil, nil, err
 	}
 	for _, b := range boxes {
@@ -483,10 +491,19 @@ func translateDelim(name string, delim rune) string {
 func excludedFolders(a Account, special, all []string) []string {
 	names := a.ExcludeFolders
 	if len(names) == 0 {
-		names = special
-	}
-	if len(names) == 0 {
-		names = wellKnownJunk(all)
+		// Union of both discovery signals, deduplicated. The tiers used to be
+		// exclusive, and the field showed why that loses mail it should not:
+		// iCloud marks only \Trash in its LIST response, so a special-use
+		// list of one folder won its tier and "Junk" — present by name —
+		// stayed searchable. A server that marks some folders still gets the
+		// name matching for the rest.
+		seen := map[string]bool{}
+		for _, n := range append(append([]string{}, special...), wellKnownJunk(all)...) {
+			if !seen[n] {
+				seen[n] = true
+				names = append(names, n)
+			}
+		}
 	}
 	out := make([]string, 0, len(names))
 	for _, n := range names {

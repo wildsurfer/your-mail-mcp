@@ -501,22 +501,27 @@ func TestExcludedFoldersFallsBackToWellKnownNamesWhenSpecialUseIsEmpty(t *testin
 // regression that filtered special through the name list would drop them
 // and fail this test.
 func TestExcludedFoldersPassesThroughSpecialUseWhenNoConfig(t *testing.T) {
+	// The regression this guards: special-use names must reach the result
+	// unfiltered. "Papierkorb" and "Custom Archive" match nothing in the
+	// name list, so a refactor that ran special through wellKnownJunk would
+	// drop them. The union may add name-matched folders on top ("Deleted
+	// Messages" here); it must never remove a special-use one.
 	a := Account{Name: "work"}
 	special := []string{"Papierkorb", "Custom Archive"}
 	all := []string{"INBOX", "Papierkorb", "Custom Archive", "Deleted Messages"}
 	got := excludedFolders(a, special, all)
-	want := []string{"work/Custom Archive", "work/Papierkorb"}
-	if len(got) != len(want) {
-		t.Fatalf("excludedFolders = %v, want exactly %v", got, want)
-	}
-	for i, w := range want {
-		if got[i] != w {
-			t.Errorf("excludedFolders = %v, want exactly %v", got, want)
-			break
+	for _, want := range []string{"work/Papierkorb", "work/Custom Archive", "work/Deleted Messages"} {
+		found := false
+		for _, g := range got {
+			if g == want {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("excludedFolders = %v, missing %q", got, want)
 		}
 	}
 }
-
 func contains(list []string, s string) bool {
 	for _, v := range list {
 		if v == s {
@@ -589,5 +594,21 @@ func TestGenMbsyncrcForcesLoginOnlyWhenUnencrypted(t *testing.T) {
 	}}, "/mail")
 	if strings.Contains(encrypted, "AuthMechs") {
 		t.Error("an encrypted connection should negotiate its own mechanism")
+	}
+}
+
+func TestExcludedFoldersUnionsSpecialUseWithKnownNames(t *testing.T) {
+	// iCloud in the field: LIST marks only \Trash ("Deleted Messages"), while
+	// the junk folder is present by name alone. Both must be excluded.
+	a := Account{Name: "icloud"}
+	got := excludedFolders(a, []string{"Deleted Messages"}, []string{"INBOX", "Junk", "Deleted Messages", "Archive"})
+	want := map[string]bool{"icloud/Deleted Messages": true, "icloud/Junk": true}
+	if len(got) != len(want) {
+		t.Fatalf("excludedFolders = %v, want exactly %v", got, want)
+	}
+	for _, f := range got {
+		if !want[f] {
+			t.Errorf("unexpected exclusion %q", f)
+		}
 	}
 }
