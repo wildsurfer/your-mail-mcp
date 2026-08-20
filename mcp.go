@@ -207,7 +207,12 @@ func (s *Server) buildQuery(ctx context.Context, q, account string, includeExclu
 		// <expression>"); "not (...)" alone already means "everything except".
 		return strings.TrimPrefix(exclude, " and "), nil
 	}
-	return scoped + exclude, nil
+	// scoped is parenthesized here because it may itself be an "or" query
+	// (from:a or from:b) or, once scopeQuery has run, a top-level "and": AND
+	// binds tighter than OR, so "from:a or from:b and not (...)" parses as
+	// "from:a or (from:b and not (...))", attaching the exclusion to only the
+	// last OR branch and leaking anything the earlier branches matched.
+	return "(" + scoped + ")" + exclude, nil
 }
 
 // knownAccount rejects an account name that is not in the configuration.
@@ -225,12 +230,36 @@ func (s *Server) knownAccount(name string) error {
 	return fmt.Errorf("unknown account %q; configured accounts are %s", name, strings.Join(names, ", "))
 }
 
-func text(payload string) *mcp.CallToolResult {
-	body, truncated, next := render(payload, 0, maxPayload)
+// page renders a payload window and appends a hint when it was truncated.
+// limit <= 0 marks a query-tool caller (search, count, folders, refresh):
+// those have no offset of their own to continue from, so the hint says to
+// narrow the query instead of claiming one. A byte-paged caller (show,
+// thread, text) always normalizes its own limit to a positive value before
+// calling in — see byteLimit — so it gets the offset-continuation hint.
+func page(payload string, offset, limit int) *mcp.CallToolResult {
+	queryTool := limit <= 0
+	if limit <= 0 || limit > maxPayload {
+		limit = maxPayload
+	}
+	body, truncated, next := render(payload, offset, limit)
 	if truncated {
-		body += fmt.Sprintf("\n[truncated at %d bytes; narrow the query or page with offset %d]", maxPayload, next)
+		if queryTool {
+			body += fmt.Sprintf("\n[truncated at %d bytes; narrow the query or lower the limit]", maxPayload)
+		} else {
+			body += fmt.Sprintf("\n[truncated; continue with offset=%d]", next)
+		}
 	}
 	return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: body}}}
+}
+
+// byteLimit normalizes an idArgs.Limit for a byte-paged tool, so it always
+// passes page a positive limit and gets the offset-continuation hint rather
+// than the query-tool one.
+func byteLimit(limit int) int {
+	if limit <= 0 || limit > maxPayload {
+		return maxPayload
+	}
+	return limit
 }
 
 func (s *Server) searchTool(ctx context.Context, _ *mcp.CallToolRequest, a searchArgs) (*mcp.CallToolResult, any, error) {
@@ -256,7 +285,7 @@ func (s *Server) runQuery(ctx context.Context, a queryArgs, nmArgs ...string) (*
 	if err != nil {
 		return nil, nil, err
 	}
-	return text(string(out)), nil, nil
+	return page(string(out), 0, 0), nil, nil
 }
 
 func (s *Server) idsTool(ctx context.Context, _ *mcp.CallToolRequest, a queryArgs) (*mcp.CallToolResult, any, error) {
@@ -276,7 +305,7 @@ func (s *Server) countTool(ctx context.Context, _ *mcp.CallToolRequest, a queryA
 	if err != nil {
 		return nil, nil, err
 	}
-	return text(fmt.Sprintf("%d", n)), nil, nil
+	return page(fmt.Sprintf("%d", n), 0, 0), nil, nil
 }
 
 type idArgs struct {
@@ -312,7 +341,7 @@ func (s *Server) showTool(ctx context.Context, _ *mcp.CallToolRequest, a idArgs)
 	if err != nil {
 		return nil, nil, err
 	}
-	return s.page(string(out), a), nil, nil
+	return page(string(out), a.Offset, byteLimit(a.Limit)), nil, nil
 }
 
 // threadTool shows every message in the thread containing id. Junk/trash
@@ -334,7 +363,7 @@ func (s *Server) threadTool(ctx context.Context, _ *mcp.CallToolRequest, a idArg
 	if err != nil {
 		return nil, nil, err
 	}
-	return s.page(string(out), a), nil, nil
+	return page(string(out), a.Offset, byteLimit(a.Limit)), nil, nil
 }
 
 // textTool returns a readable body. notmuch decodes the MIME structure
@@ -365,7 +394,7 @@ func (s *Server) textTool(ctx context.Context, _ *mcp.CallToolRequest, a idArgs)
 		if err != nil {
 			return nil, nil, err
 		}
-		return s.page(string(out), a), nil, nil
+		return page(string(out), a.Offset, byteLimit(a.Limit)), nil, nil
 	}
 	// -cols: w3m's default dump width is a terminal-sized ~80 columns, which
 	// hard-wraps ordinary prose mid-sentence for a reader that has no
@@ -387,21 +416,9 @@ func (s *Server) textTool(ctx context.Context, _ *mcp.CallToolRequest, a idArgs)
 			return nil, nil, err
 		}
 	}
-	return s.page(string(out), a), nil, nil
+	return page(string(out), a.Offset, byteLimit(a.Limit)), nil, nil
 }
 
-// page applies the caller's window to a payload, through render.
-func (s *Server) page(payload string, a idArgs) *mcp.CallToolResult {
-	limit := a.Limit
-	if limit <= 0 || limit > maxPayload {
-		limit = maxPayload
-	}
-	body, truncated, next := render(payload, a.Offset, limit)
-	if truncated {
-		body += fmt.Sprintf("\n[truncated; continue with offset=%d]", next)
-	}
-	return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: body}}}
-}
 
 // listFolders walks the maildir and returns, per account, the folder names in
 // the form a notmuch folder: query needs. A maildir folder is a directory
@@ -411,6 +428,11 @@ func listFolders(maildir string) (map[string][]string, error) {
 	err := filepath.WalkDir(maildir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil || !d.IsDir() {
 			return err
+		}
+		if name := d.Name(); name == "cur" || name == "new" || name == "tmp" {
+			// These hold message files, never further folders: prune the walk
+			// here rather than stat-ing and discarding every message inside.
+			return fs.SkipDir
 		}
 		for _, sub := range []string{"cur", "new", "tmp"} {
 			if fi, err := os.Stat(filepath.Join(path, sub)); err != nil || !fi.IsDir() {
@@ -472,7 +494,7 @@ func (s *Server) foldersTool(ctx context.Context, _ *mcp.CallToolRequest, _ stru
 	if out, err := s.nm.run(ctx, "search", "--output=tags", "*"); err == nil {
 		b.WriteString("tags: " + strings.Join(strings.Fields(string(out)), " ") + "\n")
 	}
-	return text(b.String()), nil, nil
+	return page(b.String(), 0, 0), nil, nil
 }
 
 type refreshArgs struct {
@@ -489,7 +511,7 @@ func (s *Server) refreshTool(ctx context.Context, _ *mcp.CallToolRequest, a refr
 	}
 	n, err := s.sync(ctx, a.Account, "INBOX")
 	if errors.Is(err, errSyncBusy) {
-		return text("a sync is already running; try again shortly"), nil, nil
+		return page("a sync is already running; try again shortly", 0, 0), nil, nil
 	}
 	if err != nil {
 		// The underlying error carries mbsync's combined output, which is
@@ -499,7 +521,7 @@ func (s *Server) refreshTool(ctx context.Context, _ *mcp.CallToolRequest, a refr
 		fmt.Fprintf(os.Stderr, "refresh: %v\n", err)
 		return nil, nil, fmt.Errorf("refresh failed; see server logs for detail")
 	}
-	return text(fmt.Sprintf("%d new message(s)", n)), nil, nil
+	return page(fmt.Sprintf("%d new message(s)", n), 0, 0), nil, nil
 }
 
 func (s *Server) registerTools(m *mcp.Server) {

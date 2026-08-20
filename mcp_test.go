@@ -168,6 +168,30 @@ func TestNeutralizeCoversTheFullModulus(t *testing.T) {
 	}
 }
 
+// TestPageHintDiffersByCallerClass covers F6: text() and page() were two
+// near-duplicate helpers, and text()'s hint claimed a "page with offset %d"
+// that most of its callers (count, folders, refresh) have no such parameter
+// for. The merged page() picks the hint by whether the caller passed a
+// positive limit of its own: a query-tool call (search, count, folders,
+// refresh) always passes 0, a byte-paged call (show, thread, text) always
+// normalizes its own limit to a positive value first — see byteLimit.
+func TestPageHintDiffersByCallerClass(t *testing.T) {
+	big := strings.Repeat("x", maxPayload+100)
+
+	searchStyle := resultText(t, page(big, 0, 0))
+	if strings.Contains(searchStyle, "offset") {
+		t.Errorf("a query-tool hint must not claim an offset: %q", searchStyle)
+	}
+	if !strings.Contains(searchStyle, "narrow the query") {
+		t.Errorf("a query-tool hint should say to narrow the query: %q", searchStyle)
+	}
+
+	showStyle := resultText(t, page(big, 0, 1000))
+	if !strings.Contains(showStyle, "offset") {
+		t.Errorf("a byte-paged hint should offer an offset to continue from: %q", showStyle)
+	}
+}
+
 func testServer(t *testing.T) *Server {
 	t.Helper()
 	maildir, _, config := newFixture(t, map[string][]string{
@@ -263,6 +287,30 @@ func TestSearchExcludesJunkWithNormalQuery(t *testing.T) {
 	}
 	if strings.Contains(text, "you have won") {
 		t.Error("junk reached the model on a non-wildcard query with exclusion active")
+	}
+}
+
+// TestSearchExcludesJunkOnFirstOrBranch covers F1: buildQuery appended the
+// exclude clause to an unparenthesized "or" query. AND binds tighter than OR
+// in notmuch's grammar, so "from:a or from:b and not (...)" parses as
+// "from:a or (from:b and not (...))" — the exclusion attaches only to the
+// last branch. Putting the excluded message on the *first* branch of the OR
+// (unlike TestSearchExcludesJunkWithNormalQuery, whose junk match is on the
+// last branch and so was already, misleadingly, excluded) is what exposes it.
+func TestSearchExcludesJunkOnFirstOrBranch(t *testing.T) {
+	s := testServer(t)
+	s.excluded = map[string][]string{"work": {"work/Spam"}}
+
+	res, _, err := s.searchTool(context.Background(), nil, searchArgs{Query: "from:spam@example.com or from:carol@example.com"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := resultText(t, res)
+	if !strings.Contains(text, "standup") {
+		t.Error("matching mail missing from an or query with exclusion active")
+	}
+	if strings.Contains(text, "you have won") {
+		t.Error("junk on the first OR branch reached the model: the exclude clause was not applied to the whole query")
 	}
 }
 
@@ -670,7 +718,10 @@ func TestFoldersToleratesAMissingMaildir(t *testing.T) {
 }
 
 func TestListFoldersIgnoresNonMaildirDirectories(t *testing.T) {
-	maildir, _, _ := newFixture(t, map[string][]string{"work/INBOX": {}})
+	maildir, _, _ := newFixture(t, map[string][]string{
+		"work/INBOX":     {},
+		"work/INBOX/Sub": {}, // a folder nested inside another folder
+	})
 	if err := os.MkdirAll(filepath.Join(maildir, "work", "not-a-folder"), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -681,6 +732,42 @@ func TestListFoldersIgnoresNonMaildirDirectories(t *testing.T) {
 	for _, f := range folders["work"] {
 		if strings.Contains(f, "not-a-folder") {
 			t.Errorf("listFolders returned a directory without cur/new/tmp: %v", folders)
+		}
+	}
+	want := filepath.ToSlash(filepath.Join("work", "INBOX", "Sub"))
+	found := false
+	for _, f := range folders["work"] {
+		if f == want {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("listFolders did not find the nested folder %q: %v", want, folders["work"])
+	}
+}
+
+// TestListFoldersDoesNotDescendIntoCurNewTmp covers eff4: the walk used to
+// continue into cur/new/tmp instead of pruning there, stat-ing and
+// discarding every message file underneath for nothing. It is also an
+// observable bug, not just wasted work: a directory placed inside one of
+// them — which in a real maildir can only ever be a message file — is
+// mistaken for a nested folder if it happens to contain its own cur/new/tmp
+// triplet, exactly like the "trap" directory built below.
+func TestListFoldersDoesNotDescendIntoCurNewTmp(t *testing.T) {
+	maildir, _, _ := newFixture(t, map[string][]string{"work/INBOX": {}})
+	trap := filepath.Join(maildir, "work", "INBOX", "cur", "trap")
+	for _, sub := range []string{"cur", "new", "tmp"} {
+		if err := os.MkdirAll(filepath.Join(trap, sub), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	folders, err := listFolders(maildir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range folders["work"] {
+		if strings.Contains(f, "cur") {
+			t.Errorf("listFolders descended into cur/ and picked up %q: %v", f, folders["work"])
 		}
 	}
 }
