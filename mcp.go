@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -49,8 +50,16 @@ func render(s string, offset, limit int) (text string, truncated bool, next int)
 // fake boundary and step outside its own untrusted block. Pagination offsets
 // above are computed against the original, un-neutralized s, so this cannot
 // shift where a page starts or ends.
+//
+// The whole run of 3-or-more "<" is replaced as one match, not chopped into
+// fixed-size "<<<" chunks: strings.ReplaceAll(s, "<<<", ...) does not rescan
+// its own output, so a run whose length is 5 mod 3 (5, 8, 11, ...) leaves a
+// literal "<<<" behind where two replacement chunks abut, reforming the
+// marker. A regexp match spans the entire run, so no such remainder exists.
+var markerRun = regexp.MustCompile(`<{3,}`)
+
 func neutralize(s string) string {
-	return strings.ReplaceAll(s, "<<<", "< < <")
+	return markerRun.ReplaceAllString(s, "< < <")
 }
 
 // maxPayload caps any single tool response. Context window is the real
@@ -191,11 +200,11 @@ func (s *Server) buildQuery(ctx context.Context, q, account string, includeExclu
 	if exclude == "" {
 		return scoped, nil
 	}
-	if scoped == "*" || scoped == "" {
-		// notmuch's query parser special-cases a bare "*" (and an empty
-		// query behaves the same way) and refuses to compose either with
-		// AND/AND NOT ("Syntax: <expression> AND NOT <expression>");
-		// "not (...)" alone already means "everything except".
+	if trimmed := strings.TrimSpace(scoped); trimmed == "*" || trimmed == "" {
+		// notmuch's query parser special-cases a bare "*" (and an empty or
+		// whitespace-only query behaves the same way) and refuses to compose
+		// either with AND/AND NOT ("Syntax: <expression> AND NOT
+		// <expression>"); "not (...)" alone already means "everything except".
 		return strings.TrimPrefix(exclude, " and "), nil
 	}
 	return scoped + exclude, nil
