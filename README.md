@@ -6,6 +6,14 @@ mirrors one or more IMAP accounts into a local maildir with
 [mbsync](https://isync.sourceforge.io/), indexes them with
 [notmuch](https://notmuchmail.org/), and answers tool calls from that index.
 
+![How your-mail-mcp works: mail is pulled from IMAP providers into a local mirror, indexed by notmuch, and served to an MCP client through an OAuth gate, with no write path back to the providers](docs/diagrams/how-it-works.png)
+
+Mail only ever moves left to right in that picture. The one arrow the server
+makes back toward a provider is a single IMAP `LIST` at startup, to find out
+what that server calls its junk and trash folders; it never selects a mailbox
+and never fetches a message. The diagram source is
+[`docs/diagrams/how-it-works.html`](docs/diagrams/how-it-works.html).
+
 ## What it cannot do
 
 This is read-only, by construction, not by convention.
