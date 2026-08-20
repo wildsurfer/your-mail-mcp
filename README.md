@@ -64,20 +64,15 @@ export WORK_PASS=...
 export PERSONAL_PASS=...
 ```
 
-First run only, to populate an empty maildir:
-
-```bash
-INIT_MIRROR=1 docker compose up
-```
-
-The maildir has an initialization marker file. Without `INIT_MIRROR=1` set,
-the server refuses to sync into a maildir that doesn't have one — this is
-deliberate, see [Troubleshooting](#troubleshooting). Once the marker exists,
-drop the flag for normal runs:
+Then start it:
 
 ```bash
 docker compose up -d
 ```
+
+The first run populates the maildir, which takes a while for a large mailbox
+and is slower than later runs on purpose — one IMAP command at a time is
+easier on providers that throttle. There is no separate initialization step.
 
 Call the `folders` tool to confirm both accounts synced with no errors.
 
@@ -128,7 +123,7 @@ An account name must be unique. At least one account is required; an empty
 | `OAUTH_PASSPHRASE` | yes | — | The one passphrase that gates the consent screen. |
 | `SYNC_INTERVAL` | no | `5m` | Full-sync period, as a Go duration (`5m`, `1h`). |
 | `LISTEN_ADDR` | no | `:8080` | Address the HTTP server binds. |
-| `INIT_MIRROR` | no | unset | Set to `1` to allow the first sync into an empty maildir. |
+| `INIT_MIRROR` | no | unset | Set to `1` to sync into an empty directory that is not a mount point. Not needed with compose, where `/mail` is a volume. |
 
 `CONFIG`, `MAILDIR` and `INDEX` are required; the process refuses to start
 without them. `PUBLIC_URL` and `OAUTH_PASSPHRASE` are required by the OAuth
@@ -246,12 +241,19 @@ id for. This display-name leak in `search` is not fixed in this release.
 
 ## Troubleshooting
 
-**"maildir ... has no .your-mail-mcp-initialised marker: refusing to
-sync"** — this is the empty-volume guard. It exists because an unmounted or
-mistyped volume looks exactly like an empty mailbox, and syncing into it
-would trigger a full re-download of every account the moment you noticed
-and fixed the mount. Run once with `INIT_MIRROR=1` to opt in; the server
-writes the marker and every later sync proceeds normally without the flag.
+**"maildir ... is an empty plain directory, not a mount point: refusing to
+sync"** — the server checks whether your maildir is a mounted filesystem. A
+mounted volume that happens to be empty is a first run and syncs without any
+opt-in, which is why compose needs no extra step. An empty *plain* directory
+is ambiguous: a fresh maildir looks exactly like a path whose volume was
+never mounted, and syncing into the second one re-downloads every account
+into a directory that disappears the moment you fix the mount. Either mount
+the storage where `MAILDIR` points, or set `INIT_MIRROR=1` if it really is
+meant to be an ordinary directory on this filesystem.
+
+**"maildir ...: no such file or directory"** — the path does not exist at
+all. With compose that means the volume or bind mount is missing from
+`compose.yaml`; running the binary directly, it means `MAILDIR` is wrong.
 
 **Check per-account sync status with the `folders` tool.** It lists every
 configured account, its last successful sync time, its last error if any,

@@ -111,7 +111,8 @@ func TestGenMbsyncrcQuotesNegationPattern(t *testing.T) {
 func testSyncer(t *testing.T) (*Syncer, *[]string) {
 	t.Helper()
 	maildir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(maildir, markerFile), []byte("ok"), 0o600); err != nil {
+	// A non-empty maildir is an existing mirror, which the guard passes.
+	if err := os.MkdirAll(filepath.Join(maildir, "work"), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	cfg := &Config{Accounts: []Account{{Name: "work"}, {Name: "home"}}}
@@ -188,34 +189,65 @@ func TestSyncIsSerialised(t *testing.T) {
 	wg.Wait()
 }
 
-func TestSyncRefusesAnUninitialisedMaildir(t *testing.T) {
+func TestSyncRefusesAnEmptyPlainDirectory(t *testing.T) {
 	s, _ := testSyncer(t)
-	if err := os.Remove(filepath.Join(s.maildir, markerFile)); err != nil {
+	// Strip it back to an empty plain directory: no mount, no content. That is
+	// the ambiguous case — a fresh maildir and a path whose volume was never
+	// mounted are indistinguishable — and the only one worth stopping for.
+	if err := os.Remove(filepath.Join(s.maildir, "work")); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.Sync(context.Background(), "", ""); err == nil {
-		t.Fatal("want a refusal when the maildir is not initialised")
+		t.Fatal("want a refusal for an empty plain directory")
 	}
 
 	s.initMirror = true
 	if _, err := s.Sync(context.Background(), "", ""); err != nil {
-		t.Fatalf("INIT_MIRROR should allow the first sync: %v", err)
-	}
-	if _, err := os.Stat(filepath.Join(s.maildir, markerFile)); err != nil {
-		t.Error("the first sync should leave the marker behind")
+		t.Fatalf("INIT_MIRROR should allow it: %v", err)
 	}
 }
 
-// TestDiscoverSpecialUseRespectsContextCancellation covers I4: neither Login
-// nor List had a deadline, and the function ignored the ctx it was given, so
-// a server that accepted the connection and then went quiet could hang here
-// indefinitely with no way to cancel it — during which SIGTERM did nothing,
-// since nothing was watching ctx.Done() to unblock the pending call.
-//
-// The fake server below accepts the connection and never sends a byte. A
-// correct discoverSpecialUse ties its unblocking to ctx cancellation via
-// context.AfterFunc, so cancelling ctx must make it return promptly, well
-// before any internal library timeout would.
+func TestSyncAcceptsAnEmptyMaildirWithoutCeremony(t *testing.T) {
+	s, calls := testSyncer(t)
+	// A maildir that already holds an account directory is an existing mirror.
+	// No marker file, no flag: the guard must not ask for either.
+	if s.initMirror {
+		t.Fatal("test precondition: initMirror should be false")
+	}
+	if _, err := s.Sync(context.Background(), "", ""); err != nil {
+		t.Fatalf("a populated maildir needs no opt-in: %v", err)
+	}
+	if len(*calls) == 0 {
+		t.Error("no account was synced")
+	}
+}
+
+func TestSyncReportsAMissingMaildir(t *testing.T) {
+	s, _ := testSyncer(t)
+	s.maildir = filepath.Join(s.maildir, "definitely-not-here")
+	_, err := s.Sync(context.Background(), "", "")
+	if err == nil {
+		t.Fatal("want an error when the maildir does not exist")
+	}
+	if !strings.Contains(err.Error(), "definitely-not-here") {
+		t.Errorf("error should name the path: %v", err)
+	}
+}
+
+func TestIsMountPointDistinguishesAPlainDirectory(t *testing.T) {
+	// A temp directory is never a mount point; the filesystem root always is,
+	// since its parent resolves to itself and stat reports the same device.
+	if isMountPoint(t.TempDir()) {
+		t.Error("a plain temp directory reported as a mount point")
+	}
+	if !isMountPoint("/") {
+		t.Error("the filesystem root should report as a mount point")
+	}
+	if isMountPoint(filepath.Join(t.TempDir(), "missing")) {
+		t.Error("a path that does not exist reported as a mount point")
+	}
+}
+
 func TestDiscoverSpecialUseRespectsContextCancellation(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {

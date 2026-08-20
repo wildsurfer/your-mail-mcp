@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/emersion/go-imap/v2"
@@ -116,11 +117,35 @@ func quoteMbsync(s string) string {
 
 func itoa(i int) string { return strconv.Itoa(i) }
 
-// markerFile records that this maildir has been initialised. Without it, a
-// mistyped or unmounted volume would look like an empty mailbox and mbsync
-// would re-download every account into a directory that disappears the moment
-// the real volume mounts.
-const markerFile = ".your-mail-mcp-initialised"
+// isMountPoint reports whether path is the root of a mounted filesystem, by
+// comparing its device number with its parent's. A bind mount, a Docker volume
+// and a mounted disk all differ from their parent; a plain directory does not.
+func isMountPoint(path string) bool {
+	fi, err := os.Stat(path)
+	if err != nil {
+		return false
+	}
+	dir := filepath.Dir(path)
+	if dir == path {
+		return true // the filesystem root is its own parent
+	}
+	parent, err := os.Stat(dir)
+	if err != nil {
+		return false
+	}
+	a, ok1 := fi.Sys().(*syscall.Stat_t)
+	b, ok2 := parent.Sys().(*syscall.Stat_t)
+	if !ok1 || !ok2 {
+		return false
+	}
+	return a.Dev != b.Dev
+}
+
+// isEmptyDir reports whether path is a directory with nothing in it.
+func isEmptyDir(path string) bool {
+	entries, err := os.ReadDir(path)
+	return err == nil && len(entries) == 0
+}
 
 var errSyncBusy = errors.New("sync already running")
 
@@ -216,18 +241,25 @@ func (s *Syncer) Sync(ctx context.Context, account, folder string) (int, error) 
 	return s.reindex(ctx)
 }
 
-// checkInitialised refuses to sync into a maildir that has never been
-// initialised, unless initMirror opts in. Passing this check leaves the
-// marker behind so later syncs need no flag.
+// checkInitialised refuses to sync into a maildir that looks like a missing
+// volume rather than a first run.
+//
+// The question that matters is the one the reference implementation asked of
+// /Volumes/2TB: is the storage actually there? An empty directory answers it
+// only in combination with whether that directory is a mount point. A mounted
+// volume that is empty is a genuine first run and needs no ceremony. A plain
+// empty directory is ambiguous — it is equally a fresh maildir and a path
+// typo whose real storage was never mounted — and that is the only case worth
+// stopping for, since syncing into it re-downloads every account into a
+// directory that vanishes the moment the mount appears.
 func (s *Syncer) checkInitialised() error {
-	path := filepath.Join(s.maildir, markerFile)
-	if _, err := os.Stat(path); err == nil {
+	if _, err := os.Stat(s.maildir); err != nil {
+		return fmt.Errorf("maildir %s: %w", s.maildir, err)
+	}
+	if s.initMirror || isMountPoint(s.maildir) || !isEmptyDir(s.maildir) {
 		return nil
 	}
-	if !s.initMirror {
-		return fmt.Errorf("maildir %s has no %s marker: refusing to sync, since an unmounted or mistyped volume would look empty and trigger a full re-download; set INIT_MIRROR=1 for the first sync", s.maildir, markerFile)
-	}
-	return os.WriteFile(path, []byte(time.Now().UTC().Format(time.RFC3339)+"\n"), 0o600)
+	return fmt.Errorf("maildir %s is an empty plain directory, not a mount point: refusing to sync, since a path whose volume was never mounted looks exactly like this and would trigger a full re-download. Mount the storage there, or set INIT_MIRROR=1 if it really is meant to be a directory on this filesystem", s.maildir)
 }
 
 func (s *Syncer) record(account string, err error) {

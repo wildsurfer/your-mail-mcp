@@ -10,6 +10,12 @@
 
 **Spec:** `docs/superpowers/specs/2026-08-19-your-mail-mcp-design.md`
 
+> **This plan is a historical record of how v1 was built.** Where it and the
+> shipped code disagree, the code and the spec are right. In particular, Task 9's
+> maildir guard was later replaced: the marker file and the mandatory first-run
+> flag are gone, and the program compares device numbers to see whether the
+> maildir is a mount point instead.
+
 ## Global Constraints
 
 - Module path `github.com/wildsurfer/your-mail-mcp`. Go 1.25 or later — `modelcontextprotocol/go-sdk` v1.7.0 declares `go 1.25.0`, so the earlier 1.23 floor is unreachable.

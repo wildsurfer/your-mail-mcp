@@ -63,7 +63,7 @@ Process-level settings are environment variables:
 | `OAUTH_PASSPHRASE` | the single passphrase gating consent |
 | `PUBLIC_URL` | external URL, used in OAuth metadata documents |
 | `LISTEN_ADDR` | address to bind, default `:8080` |
-| `INIT_MIRROR` | opt-in for the first sync into an empty maildir |
+| `INIT_MIRROR` | opt-in for syncing into an empty directory that is not a mount point |
 
 Accounts live in a JSON file, parsed with `encoding/json` so no dependency is
 added. Secrets stay in the environment and are referenced by `${VAR}`, expanded at
@@ -154,11 +154,26 @@ func (s *Server) sync(ctx context.Context, account, folder string) (added int, e
   at a time, accounts synced sequentially. `refresh` returns "sync already
   running" rather than queueing. Sequential syncing is a deliberate ceiling: per
   account locks and parallel passes are the upgrade if a full pass gets slow.
-- **Empty-volume guard.** If `MAILDIR` is empty and the marker file is absent,
-  refuse to sync. Otherwise a mistyped or unmounted volume causes a full
-  re-download of every mailbox into a directory that will be shadowed the moment
-  the real volume appears. The first sync is opted into explicitly with
-  `INIT_MIRROR=1`.
+- **Empty-volume guard.** The question worth asking is the one the reference
+  implementation asked of `/Volumes/2TB`: is the storage actually there? An empty
+  directory answers it only together with whether that directory is a mount point,
+  which the program determines by comparing its device number with its parent's.
+
+  A mounted volume that is empty is a genuine first run and syncs with no opt-in
+  and no marker file, so the shipped compose path has no initialisation step. An
+  empty *plain* directory is the ambiguous case — a fresh maildir and a path whose
+  volume was never mounted are indistinguishable — and only that case is refused,
+  because syncing into it re-downloads every account into a directory that vanishes
+  the moment the mount appears. `INIT_MIRROR=1` overrides it for an operator who
+  really does want an ordinary directory. A maildir that already holds anything is
+  an existing mirror and is never questioned.
+
+  An earlier version of this spec used a marker file inside the maildir plus a
+  mandatory flag on first run. That threw away the signal: a marker inside the
+  volume cannot distinguish "never initialised" from "volume missing", so the flag
+  existed only to paper over the ambiguity, and every operator paid a two-step
+  first run for it.
+
 - **Timeouts and throttling.** Every sync has a deadline. Provider throttling is
   logged and left for the next tick, never retried in a tight loop.
 
