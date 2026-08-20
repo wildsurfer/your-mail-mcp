@@ -3333,7 +3333,7 @@ func (o *oauthServer) grantCode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sum := sha256.Sum256([]byte(r.Form.Get("code_verifier")))
-	if base64.RawURLEncoding.EncodeToString(sum[:]) != ac.challenge {
+	if subtle.ConstantTimeCompare([]byte(base64.RawURLEncoding.EncodeToString(sum[:])), []byte(ac.challenge)) != 1 {
 		tokenError(w, "invalid_grant")
 		return
 	}
@@ -3354,7 +3354,10 @@ func (o *oauthServer) grantRefresh(w http.ResponseWriter, r *http.Request) {
 		// Rotation: the presented token dies in the same response that issues
 		// its replacement, which OAuth 2.1 requires for public clients.
 		delete(o.state.Refresh, presented)
-		_ = o.save()
+		// Check this error and fail closed: a discarded save means the on-disk
+		// state can still list the rotated-away token as valid after a restart,
+		// so a replayed old token would succeed.
+		saveErr = o.save()
 	}
 	o.mu.Unlock()
 
