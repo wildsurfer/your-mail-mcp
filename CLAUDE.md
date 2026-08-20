@@ -1,153 +1,113 @@
 # your-mail-mcp
 
-Self-hosted MCP server that exposes Ivan's mail to any MCP client. Repo: `wildsurfer/your-mail-mcp`.
+A self-hosted MCP server that gives an MCP client read access to one or more IMAP
+accounts. Mail is mirrored to a local maildir by mbsync, indexed by notmuch, and
+served over streamable HTTP behind an in-process OAuth 2.0 authorization server.
 
-This file is a briefing on decisions already made. Detail lives in `docs/research/`; do not restate it here, point at it.
+This file is the briefing for anyone changing the code. `README.md` is for
+operators running it. The reasoning behind the design is in
+`docs/specs/2026-08-19-your-mail-mcp-design.md`, and what was verified
+against real tools is in `docs/reviews/`.
 
 ## Status
 
-Nothing is built yet. The directory holds research and this briefing. The working system it replaces is at `/Volumes/2TB/Mail` (see "Reference implementation" below).
-
-## Decisions
-
-### Build, do not adopt
-
-The landscape was surveyed and no existing project fits. The candidates are all live-IMAP servers with a send path, which is the opposite of both architectural choices below. Adopting one would mean rewriting its data layer and removing its default capability, so it is cheaper to build. See `docs/research/email-mcp-landscape.md`.
-
-### Data layer is notmuch over maildir, not live IMAP
-
-Mail is mirrored to a local maildir by mbsync and indexed by notmuch. The server queries notmuch. It does not open an IMAP connection to read.
-
-Live IMAP was rejected on mailbox size. The account holds roughly 36,000 messages across 14 folders. Search over IMAP means either round-tripping SEARCH per query against a provider that is slow and rate-limited, or maintaining a local index anyway. notmuch already is that index, with full-text search, threading, and stable message IDs. iCloud IMAP specifics are in `docs/research/icloud-imap-research.md`.
-
-### Read-only is enforced inside the process, at every write path
-
-Read-only is enforced on the write paths themselves. It is not implemented by leaving tools out of the registered tool list.
-
-The cautionary example is `codefuturist/email-mcp`. It gated tool registration on a read-only flag, so the mutating tools were not exposed to the client. A scheduler timer inside the process sent mail anyway, because it called the send path directly and never passed through the gate. The tool list is a description of the interface, not a security boundary. Anything inside the process that is not an MCP tool handler (timers, retries, background jobs, cleanup) bypasses it entirely.
-
-For the concrete mechanism, see "The send gate is a type, not a guard function" under Implementation language. The enforcement is a constructor returning a refusing implementation, so the check cannot be omitted at a call site.
-
-### Composing a draft is the default; the server does not send
-
-This is a product requirement, not a preference, and it is the project's identity. The default behaviour of the server is to compose a draft and hand it to a human for review. There is no send.
-
-Sending is opt-in behind an explicit startup flag and is off unless the flag is set. The flag must gate every send path in the process, and gating tool registration is not sufficient. This is the same lesson as read-only above, with the same failure mode if it is done at the registration layer.
-
-The flag is read once, at construction. See "The send gate is a type, not a guard function" under Implementation language.
-
-### Implementation language is Go
-
-This is a long-running network service that holds mail credentials and parses untrusted email, so a small dependency tree matters more than it usually would. A single static binary gives a container of roughly 20MB with no runtime to install, which is what makes the container-first distribution decision below practical.
-
-Raw performance was not the deciding factor. notmuch and Xapian do the heavy lifting; the server parses a query, calls notmuch, formats results, and occasionally appends over IMAP.
-
-The accepted trade-off: `go install` is not how people expect to install MCP servers, where `npx` and `uvx` dominate. Mitigate by shipping release binaries and the container image, so nobody is expected to build from source.
-
-#### Design consequences
-
-These are the point of choosing Go. Write them into the architecture rather than treating them as style notes.
-
-**The send gate is a type, not a guard function.** Do not write a `canSend()` check called at each write site. That is exactly the mistake made twice already: the Rust project we studied repeated its check at around ten call sites, and codefuturist's scheduler sent from outside the gate entirely. A check that must be remembered at every site will eventually be forgotten at one.
-
-Instead, put all mutation behind a single interface. The constructor returns a refusing implementation when the send flag is unset, so no code path capable of sending exists in the process at all. Keep the sending type unexported and obtainable only from that factory. The guarantee is then structural: there is no object to call. The same shape applies to the read-only enforcement above.
-
-**Query notmuch by executing it with JSON output.** Do not bind to the C library through cgo. Shelling out keeps the build fully static, avoids putting a cgo toolchain in the container, and sidesteps version coupling between the Go binary and whatever notmuch is installed. `bin/mailq` in the reference implementation already does exactly this and can be read as a working spec.
-
-#### Starting-point libraries
-
-Starting points, not settled dependencies.
-
-- `github.com/modelcontextprotocol/go-sdk` — the official Go SDK, maintained with Google. Supports stdio, SSE, and streamable HTTP. Its `auth` and `oauthex` packages are useful later for the OAuth work.
-- `github.com/emersion/go-imap` and `github.com/emersion/go-message` — the established choices for IMAP and MIME.
-
-### Fallback and reference code
-
-If the maildir approach is ever abandoned for IMAP-direct, fork `bradsjm/mail-imap-mcp-rs`. Do not fork `tecnologicachile/mail-mcp`, the Chilean fork.
-
-Two things in `mail-mcp` are worth copying regardless of which base is used:
-
-- Provider-aware Sent folder logic. The Sent folder name varies by provider and cannot be guessed from a single constant.
-- The UIDVALIDITY recheck between search and mutation. A UID obtained from a search is only meaningful under the UIDVALIDITY that was current when the search ran. Re-verify before acting on it, or the mutation lands on a different message.
-
-Comparison and repo-layout notes: `docs/research/mcp-mail-server-repo-shape.md`.
-
-### OAuth is real work but off the critical path
-
-iCloud has no OAuth, so the first working version needs none. Google and Microsoft do, and implementing both is a meaningful amount of work to schedule later.
-
-One constraint on the sequencing: Microsoft 365 has required OAuth for IMAP since October 2022, basic authentication having been retired. Any claim that the server works with all providers depends on OAuth existing. Do not make that claim before it does.
-
-### Credential storage
-
-The current setup keeps app-specific passwords in a dedicated macOS keychain. Moving off the Mac mini means the keychain is gone and the server needs its own encrypted credential store. Use `mailbox-mcp` as the reference: AES-256-GCM with a passphrase-derived key.
-
-### Naming
-
-Naming research is in `docs/research/mcp-mail-server-naming.md` and `docs/research/mcp-naming-family-research-archive.md`.
-
-## Deployment
-
-Decided. The reasoning is recorded so a future session understands the constraints; treat the conclusions as settled.
-
-### Serverless and edge are ruled out
-
-The data layer is a maildir plus a Xapian index. It needs a persistent filesystem, a long-running sync process, and native binaries. Cloudflare Workers cannot run notmuch. Lambda cannot hold a mail spool. Anything edge-shaped is the wrong shape for this workload, so do not evaluate it again.
-
-### Preferred: index stays on the Mac mini, tunnel in front
-
-Keep the maildir and the index where they are and expose the server through Cloudflare Tunnel or Tailscale Funnel. Either one is acceptable.
-
-Both give a public HTTPS hostname over an outbound connection from the machine, with no open ports and no public IP. That matters because of a constraint established earlier: custom connectors are reached from Anthropic's cloud rather than from the user's device. A tailnet-only address is therefore unreachable, while a Funnel or Tunnel hostname is reachable. The mail never leaves the house.
-
-### Fallback: a small VPS
-
-Hetzner or DigitalOcean, both of which Ivan already has accounts with. About five dollars a month covers it, since the mirror is roughly 2.5GB. AWS would also work and adds complexity for nothing gained.
-
-The real cost of this option is the threat model rather than the money. A full plaintext copy of Ivan's mail moves onto a rented disk reachable from the internet, with the app-specific password sitting beside it. Taking this path requires an encrypted volume and an encrypted credential store, and it should be chosen deliberately.
-
-Two triggers that would push towards the VPS, both already observed on the mini:
-
-- It is headless, so a reboot without auto-login stops the scheduled sync.
-- An unmounted `/Volumes/2TB` would silently break the mirror.
-
-### Local Claude Code needs none of this
-
-Claude Code running on the same machine reaches the server over stdio or localhost. Public reachability exists only for phone-initiated sessions and non-Anthropic clients.
-
-### Ship a container image and a compose file
-
-Product requirement, not a preference. The image and compose file are part of what ships. The maildir and the index are mounted volumes; everything else is configured by environment variable.
-
-The research found this is where the field consistently fails. The most popular IMAP MCP server had its Dockerfile removed. The one project that shipped a proper multi-arch image sits at zero stars and went unnoticed. Doing this well is a differentiator.
-
-A good image also makes the hosting choice reversible, since the same image runs on the mini, on a VPS, or on a NAS.
-
-## Reference implementation: /Volumes/2TB/Mail
-
-A working system, in daily use, being refactored into this project. Read it before designing anything; the hard-won details are in its comments.
-
-| Path | What it does |
-| --- | --- |
-| `config/mbsyncrc` | mbsync config. One-way read-only mirror of iCloud into `Maildir/icloud/`. The read-only guarantee is four directives: `Sync Pull`, `Create Near`, `Remove None`, `Expunge None`. Password comes from the dedicated keychain via `PassCmd`. |
-| `config/notmuch-config` | notmuch config. Index at `notmuch/`, mail root at `Maildir/icloud`, deliberately the account directory and not its parent. Maildir flags are the single source of truth for read/flagged/draft state. |
-| `bin/sync-icloud.sh` | Sync wrapper run by a LaunchAgent every 5 minutes. Checks that `/Volumes/2TB` is actually mounted before writing, unlocks the mail keychain, runs mbsync, then reindexes. Rotates its own log. |
-| `bin/mailq` | Read-only notmuch front end for the agent, returns JSON. Subcommands: search, ids, files, show, thread, count, folders, text. Cannot send, delete, move, tag, or sync. |
-| `bin/mail-draft` | Composes a `.eml` under `drafts/` and, as a separate step, APPENDs that exact file to the iCloud Drafts mailbox over IMAP. Its entire write surface against the account is one IMAP APPEND into one hardcoded mailbox. No STORE, EXPUNGE, delete, move, or rename. Splitting compose from push means a failed upload never loses the text and every pushed draft leaves a reviewable artifact. |
-| `bin/install-keychain.sh` | Creates the dedicated `icloud-mail` keychain and stores the two app-specific passwords. Run by hand. Every `security` call names its keychain by full path, because the default keychain on this Mac is not `login`. |
-| `.claude/skills/email/` | The `email` skill. Tells the agent to read the mirror and compose drafts, never to connect to IMAP for reading. |
-| `.claude/settings.json` | Permission allow and deny rules. Allows the two wrappers and read-only `notmuch search/show/count`. Denies network tools, sendmail/msmtp/mail, `security`, `mbsync`, `notmuch tag/dump/restore`, and `rm`. |
-
-The shape to carry forward: the mirror is read-only by configuration, reads go through a wrapper that structurally cannot write, and the one write path is a single narrow operation into a single mailbox.
-
-## Research files
-
-`docs/research/`
-
-- `icloud-imap-research.md` — iCloud IMAP behaviour, quirks, limits.
-- `email-mcp-landscape.md` — survey of existing email MCP servers. **Not yet copied in.**
-- `mcp-mail-server-naming.md` — naming options and reasoning. **Not yet copied in.**
-- `mcp-mail-server-repo-shape.md` — repo layout, comparison of candidate bases. **Not yet copied in.**
-- `mcp-naming-family-research-archive.md` — naming research archive. **Not yet copied in.**
-
-The four marked files exist in earlier Cowork session output folders but could not be read across sessions. Copy them in from those sessions, or ask Ivan to place them in `docs/research/`. Until then the claims in this briefing that cite them are recorded from Ivan's own summary and have not been checked against the source.
+v1 is implemented: nine read tools, multi-account sync, SPECIAL-USE junk
+discovery, OAuth with dynamic client registration, and a container image.
+
+Not verified against a real mail account yet. See "Before trusting it" below.
+
+## Invariants
+
+These are the reasons this project exists in this shape. Do not weaken one
+without changing the spec first.
+
+- **Nothing in the process may write to a mail account.** mbsync is configured
+  `Sync Pull` / `Create Near` / `Remove None` / `Expunge None`, generated by the
+  program rather than mounted, so the directives cannot be edited into something
+  that pushes. There is no send, delete, move or tag path.
+- **The only IMAP operation in Go code is `LIST`**, used once per account to find
+  the junk and trash folders. It never selects a mailbox and never fetches a
+  message, and the client object does not escape the function that opens it.
+- **Every byte of mail content reaching the model passes through `render()`.**
+  `page()` in `mcp.go` is the only place that constructs tool content. No tool
+  formats content itself. `render` also neutralises any occurrence of the
+  marker sentinel in the payload, so mail cannot forge the untrusted-content
+  wrapper.
+- **Junk and trash are excluded from search by default**, discovered per account
+  through RFC 6154 SPECIAL-USE so it works whatever the folders are named and in
+  whatever language.
+- **Exactly two dependencies**: `modelcontextprotocol/go-sdk` and
+  `emersion/go-imap/v2`. Everything else is the standard library, tests included.
+
+## Design decisions
+
+- **v1 is read-only; that is scope, not the product's final identity.** v2
+  intends draft composition behind a send gate built as a type — a
+  constructor that returns a refusing implementation when sending is off —
+  per the spec.
+- **Build, not adopt.** Every existing email MCP server is a live-IMAP server with
+  a send path, which is the opposite of both choices above. See
+  `docs/research/email-mcp-landscape.md`.
+- **notmuch over a maildir, not live IMAP.** Search over IMAP means round-tripping
+  SEARCH against a slow, rate-limited provider, or maintaining a local index
+  anyway. notmuch already is that index, with threading and stable message ids.
+- **Go**, for a small dependency tree in a long-running service that holds mail
+  credentials and parses untrusted input, and for a static binary in a small image.
+- **notmuch is executed, never linked through cgo.** Keeps the build static and
+  decouples the binary from the installed notmuch version.
+- **OAuth 2.0 with Dynamic Client Registration**, implemented in-process. Claude's
+  connector documentation makes DCR the supported path and rules out a
+  machine-to-machine grant, so consent is always required.
+- **The container is the unit of deployment.** Where it runs is a runtime decision
+  the code knows nothing about.
+
+## Layout
+
+| Path | What |
+|---|---|
+| `main.go` | environment, accounts file, wiring, tickers, HTTP handler, bearer check |
+| `mcp.go` | the nine tools, `render()` chokepoint, query building, exclusions |
+| `notmuch.go` | executing notmuch, query validation, account scoping |
+| `sync.go` | generated configs, mbsync, sync mutex, guards, SPECIAL-USE discovery |
+| `oauth.go` | authorization-server endpoints and the client/token store |
+| `.github/workflows/ci.yaml` | vet, unit and live tests on every PR; multi-arch image to GHCR on main and tags; release binaries on tags |
+| `docs/specs/` | the design spec, which is the binding authority |
+| `docs/reviews/` | what was verified against the real toolchain, and what was not |
+| `docs/research/` | the survey and provider research the design rests on |
+
+## Conventions
+
+- Tests use `testing` from the standard library. No framework, no assertion
+  library, no mocking library.
+- `go vet ./...`, `go build ./...`, `go test ./...` and `go test -race ./...` all
+  clean before a commit.
+- `go test -tags live -run TestLive -timeout 15m` runs the full stack — the
+  shipped container against a real IMAP server, every tool through the real
+  OAuth flow. It needs Docker, isolates itself under the compose project
+  `ymm-live`, and tears everything down including volumes. Run it before any
+  change to the sync path, the generated configs, or the Dockerfile: the class
+  of defect it catches (container toolchain skew, the real IMAP conversation)
+  is invisible to the rest of the suite.
+- `INBOX` is the only folder name that may be hardcoded; RFC 3501 requires it.
+- Pipeline depth is pinned to 1 and `SubFolders` to `Verbatim`, and `AuthMechs` is
+  left unset. Those are settled; see the spec for why.
+- Dependencies stay on the latest stable release everywhere: the Go toolchain,
+  the two modules, and the image's base and packages. When no stable release
+  exists, the newest available is used and named as the exception — today that
+  is `go-imap/v2`, which has never shipped a stable v2. When bumping the base
+  image, run the live test: the container's tool versions are exactly what it
+  exists to catch.
+- Commit messages describe the change in plain terms. No AI or agent attribution
+  anywhere in the repository.
+
+## Before trusting it
+
+The gap between "tests pass" and "safe against a real mailbox" is these three:
+
+1. SPECIAL-USE discovery against a real Gmail and a real iCloud account. The
+   live test covers a real IMAP conversation end to end, but its test server
+   does not advertise SPECIAL-USE, so junk discovery against the providers that
+   do remains unverified in the field.
+2. A real connector handshake. The OAuth flow has only been exercised through
+   `httptest`.
+3. The README quick start, followed literally on a clean machine.

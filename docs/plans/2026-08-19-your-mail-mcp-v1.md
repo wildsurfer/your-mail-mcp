@@ -1,18 +1,24 @@
 # your-mail-mcp v1 Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
-
 **Goal:** Build a read-only MCP server that serves several IMAP accounts from a local notmuch index over authenticated HTTP, shipped as a container image.
 
 **Architecture:** One Go process holds an HTTP server and a sync ticker. mbsync mirrors each account into `$MAILDIR/<account>/` pull-only, notmuch indexes all of them into one database, and every tool call shells out to `notmuch` with JSON output. Authentication is OAuth 2.0 with Dynamic Client Registration, implemented in-process, gated by a single passphrase.
 
 **Tech Stack:** Go (stdlib plus two dependencies), `isync`/mbsync, notmuch, w3m, Debian-slim container.
 
-**Spec:** `docs/superpowers/specs/2026-08-19-your-mail-mcp-design.md`
+**Spec:** `docs/specs/2026-08-19-your-mail-mcp-design.md`
+
+> **This plan is a historical record of how v1 was built.** Where it and the
+> shipped code disagree, the code and the spec are right. In particular, Task 9's
+> maildir guard was later replaced: the mandatory first-run flag is gone, and
+> the program compares device numbers to see whether the maildir is a mount
+> point instead. A marker file returned after that, in a different shape and
+> location — see the spec's "Empty-volume guard" for why it does not repeat
+> the original mistake.
 
 ## Global Constraints
 
-- Module path `github.com/wildsurfer/your-mail-mcp`. Go 1.23 or later.
+- Module path `github.com/wildsurfer/your-mail-mcp`. Go 1.25 or later — `modelcontextprotocol/go-sdk` v1.7.0 declares `go 1.25.0`, so the earlier 1.23 floor is unreachable.
 - **Exactly two dependencies are permitted**: `github.com/modelcontextprotocol/go-sdk` and `github.com/emersion/go-imap/v2`. Everything else is standard library. Adding a third needs a decision, not a commit.
 - All Go source lives in the repository root as `package main`, in five files: `main.go`, `mcp.go`, `notmuch.go`, `sync.go`, `oauth.go`. Tests are `*_test.go` beside them.
 - Tests use `testing` from the standard library. No test framework, no assertion library, no mocking library.
@@ -302,6 +308,7 @@ func TestValidateQuery(t *testing.T) {
 		"fom:alice",         // typo, would silently match nothing
 		"sender:alice",      // not a notmuch prefix
 		"folder:INBOX and x:1",
+		`subjet:"x"`,        // a typo directly before a quoted value
 	}
 	for _, q := range bad {
 		err := validateQuery(q)
@@ -388,6 +395,13 @@ func validateQuery(q string) error {
 	for _, r := range q {
 		switch {
 		case r == '"':
+			// Flush before opening a quote, or the prefix that precedes it is
+			// discarded unchecked and bogus:"x" validates clean.
+			if !inQuotes {
+				if err := flush(); err != nil {
+					return err
+				}
+			}
 			inQuotes = !inQuotes
 			word.Reset()
 		case inQuotes:
@@ -519,7 +533,7 @@ func TestNotmuchCountsAndScopes(t *testing.T) {
 		},
 	})
 	n := newNotmuch(config)
-	ctx := t.Context()
+	ctx := context.Background() // t.Context() is Go 1.24+; go.mod now pins 1.27
 
 	total, err := n.count(ctx, "*")
 	if err != nil {
@@ -665,7 +679,7 @@ func TestRenderWrapsContent(t *testing.T) {
 }
 
 func TestRenderPaginates(t *testing.T) {
-	body := strings.Repeat("a", 250)
+	body := strings.Repeat("x", 250) // not "a": the marker text contains "data"
 
 	text, truncated, next := render(body, 0, 100)
 	if !truncated {
@@ -674,8 +688,8 @@ func TestRenderPaginates(t *testing.T) {
 	if next != 100 {
 		t.Fatalf("next = %d, want 100", next)
 	}
-	if strings.Count(text, "a") != 100 {
-		t.Fatalf("got %d bytes of content, want 100", strings.Count(text, "a"))
+	if strings.Count(text, "x") != 100 {
+		t.Fatalf("got %d bytes of content, want 100", strings.Count(text, "x"))
 	}
 
 	text, truncated, next = render(body, 200, 100)
@@ -685,8 +699,8 @@ func TestRenderPaginates(t *testing.T) {
 	if next != 0 {
 		t.Errorf("next = %d on the final page, want 0", next)
 	}
-	if strings.Count(text, "a") != 50 {
-		t.Errorf("final page has %d bytes, want 50", strings.Count(text, "a"))
+	if strings.Count(text, "x") != 50 {
+		t.Errorf("final page has %d bytes, want 50", strings.Count(text, "x"))
 	}
 
 	if _, _, _ = render(body, 9999, 100); false {
@@ -971,7 +985,14 @@ func (s *Server) buildQuery(q, account string, includeExcluded bool) (string, er
 	if includeExcluded {
 		return scoped, nil
 	}
-	return scoped + s.excludeClause(), nil
+	clause := s.excludeClause()
+	// notmuch's parser special-cases a bare "*" and refuses to compose it with
+	// AND NOT; `(*) and not (...)` parses but returns nothing, which is worse.
+	// "not (...)" alone already means everything-except.
+	if scoped == "*" && clause != "" {
+		return strings.TrimPrefix(clause, " and "), nil
+	}
+	return scoped + clause, nil
 }
 
 func text(payload string) *mcp.CallToolResult {
@@ -1277,12 +1298,12 @@ Expected: `undefined: foldersTool`, `undefined: AccountStatus`.
 
 - [ ] **Step 3: Write the implementation**
 
-```go
-// append to sync.go
-import "time"
+`AccountStatus` is already defined in `sync.go`: Task 5's `Server` struct
+references it, so it had to land there. Confirm the existing definition matches
+the shape below and move on — re-declaring it is a compile error.
 
-// AccountStatus is what the folders tool reports so a broken account is visible
-// without reading container logs.
+```go
+// already present in sync.go
 type AccountStatus struct {
 	LastSync  time.Time
 	LastError string
@@ -1486,9 +1507,10 @@ import (
 // something that pushes, and a stray blank line cannot silently demote them to
 // global options.
 //
-// The password is written into the file. The file lives in a tmpfs inside the
-// container with mode 0600, so it is no more exposed than the environment it
-// came from.
+// The password is written into the file, which lives in a private temporary
+// directory at mode 0600 and is removed on exit. It is ordinary container
+// filesystem, not a tmpfs — the compose file mounts none — so its protection is
+// the mode and the container boundary.
 func genMbsyncrc(cfg *Config, maildir string) string {
 	var b strings.Builder
 	b.WriteString("# generated at startup; edits are discarded on restart\n")
@@ -1525,7 +1547,14 @@ func genMbsyncrc(cfg *Config, maildir string) string {
 		b.WriteString("\nChannel " + a.Name + "\n")
 		b.WriteString("Far :" + a.Name + "-remote:\n")
 		b.WriteString("Near :" + a.Name + "-local:\n")
-		b.WriteString("Patterns " + strings.Join(a.Patterns, " ") + "\n")
+		// Each pattern is quoted individually: unquoted, `Patterns Sent Items`
+		// parses as two globs, so an Exchange "Sent Items" folder silently falls
+		// out of scope. Verified against mbsync 1.5.1, including "*" and "!Trash".
+		pats := make([]string, len(a.Patterns))
+		for i, pat := range a.Patterns {
+			pats[i] = quoteMbsync(pat)
+		}
+		b.WriteString("Patterns " + strings.Join(pats, " ") + "\n")
 		// The read-only guarantee. Do not add a blank line above this comment.
 		b.WriteString("Sync Pull\n")
 		b.WriteString("Create Near\n")
@@ -2314,7 +2343,7 @@ git commit -m "Discover junk and trash folders through IMAP SPECIAL-USE, with a 
 - [ ] **Step 1: Write the Dockerfile**
 
 ```dockerfile
-FROM golang:1.23-bookworm AS build
+FROM golang:1.25-bookworm AS build
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
@@ -2831,6 +2860,12 @@ func redirectAllowed(registered []string, candidate string) bool {
 	if err != nil {
 		return false
 	}
+	// A redirect URI carrying userinfo, a query or a fragment is refused
+	// outright: host-and-path comparison alone would let all three through,
+	// and RFC 6749 3.1.2 forbids the fragment.
+	if c.User != nil || c.RawQuery != "" || c.Fragment != "" {
+		return false
+	}
 	for _, r := range registered {
 		p, err := url.Parse(r)
 		if err != nil {
@@ -3305,7 +3340,7 @@ func (o *oauthServer) grantCode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sum := sha256.Sum256([]byte(r.Form.Get("code_verifier")))
-	if base64.RawURLEncoding.EncodeToString(sum[:]) != ac.challenge {
+	if subtle.ConstantTimeCompare([]byte(base64.RawURLEncoding.EncodeToString(sum[:])), []byte(ac.challenge)) != 1 {
 		tokenError(w, "invalid_grant")
 		return
 	}
@@ -3317,15 +3352,23 @@ func (o *oauthServer) grantRefresh(w http.ResponseWriter, r *http.Request) {
 
 	o.mu.Lock()
 	rt, ok := o.state.Refresh[presented]
-	if ok {
+	// Validate the client BEFORE deleting: deleting first burns a valid token
+	// on a mismatched client_id and issues nothing in its place, locking the
+	// owner out of their own server.
+	if ok && r.Form.Get("client_id") != "" && r.Form.Get("client_id") != rt.ClientID {
+		ok = false
+	} else if ok {
 		// Rotation: the presented token dies in the same response that issues
 		// its replacement, which OAuth 2.1 requires for public clients.
 		delete(o.state.Refresh, presented)
-		_ = o.save()
+		// Check this error and fail closed: a discarded save means the on-disk
+		// state can still list the rotated-away token as valid after a restart,
+		// so a replayed old token would succeed.
+		saveErr = o.save()
 	}
 	o.mu.Unlock()
 
-	if !ok || (r.Form.Get("client_id") != "" && r.Form.Get("client_id") != rt.ClientID) {
+	if !ok {
 		tokenError(w, "invalid_grant")
 		return
 	}
@@ -3661,12 +3704,12 @@ Expected: PASS, including the nine-tool count and the authenticated `count` call
 
 - [ ] **Step 5: Update the spec to match the deviation**
 
-Edit `docs/superpowers/specs/2026-08-19-your-mail-mcp-design.md`, section 4: replace the sentence about the SDK providing the resource-server half with a note that bearer verification, the 401 shape and both metadata documents are implemented directly, and why.
+Edit `docs/specs/2026-08-19-your-mail-mcp-design.md`, section 4: replace the sentence about the SDK providing the resource-server half with a note that bearer verification, the 401 shape and both metadata documents are implemented directly, and why.
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add main.go oauth.go e2e_test.go docs/superpowers/specs/2026-08-19-your-mail-mcp-design.md
+git add main.go oauth.go e2e_test.go docs/specs/2026-08-19-your-mail-mcp-design.md
 git commit -m "Serve MCP over authenticated streamable HTTP, with an end-to-end test"
 ```
 

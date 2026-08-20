@@ -1,0 +1,19 @@
+services:
+  your-mail-mcp:
+    image: ghcr.io/wildsurfer/your-mail-mcp:latest
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8080:8080"
+    environment:
+      PUBLIC_URL: ${PUBLIC_URL}
+      OAUTH_PASSPHRASE: ${OAUTH_PASSPHRASE}
+      SYNC_INTERVAL: 5m
+      WORK_PASS: ${WORK_PASS:-}
+      PERSONAL_PASS: ${PERSONAL_PASS:-}
+    volumes:
+      - ./accounts.json:/config/accounts.json:ro
+      - mail:/mail
+      - index:/index
+volumes:
+  mail:
+  index:

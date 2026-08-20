@@ -60,10 +60,11 @@ Process-level settings are environment variables:
 | `MAILDIR` | maildir root; each account gets a directory under it |
 | `INDEX` | notmuch/Xapian index directory |
 | `SYNC_INTERVAL` | full-sync period, default 5m |
+| `SYNC_TIMEOUT` | per-account deadline for one mbsync run, default 1h |
 | `OAUTH_PASSPHRASE` | the single passphrase gating consent |
 | `PUBLIC_URL` | external URL, used in OAuth metadata documents |
 | `LISTEN_ADDR` | address to bind, default `:8080` |
-| `INIT_MIRROR` | opt-in for the first sync into an empty maildir |
+| `INIT_MIRROR` | opt-in for syncing into an empty directory that is not a mount point |
 
 Accounts live in a JSON file, parsed with `encoding/json` so no dependency is
 added. Secrets stay in the environment and are referenced by `${VAR}`, expanded at
@@ -121,7 +122,10 @@ the build static and decouples the binary from the installed notmuch version.
 ### Generated configuration
 
 The mbsync and notmuch configuration files are generated at startup from the
-accounts file into a tmpfs, rather than mounted from the host. One mbsync channel
+accounts file into a private temporary directory the process owns and removes
+on exit, rather than mounted from the host. That directory is ordinary
+container filesystem, not a tmpfs: the compose file mounts none, so the file's
+protection is its 0600 mode and the container boundary, nothing more. One mbsync channel
 per account. The four directives that constitute the read-only guarantee —
 `Sync Pull`, `Create Near`, `Remove None`, `Expunge None` — are therefore written
 by the program, per channel, and cannot be edited into something that pushes.
@@ -151,11 +155,49 @@ func (s *Server) sync(ctx context.Context, account, folder string) (added int, e
   at a time, accounts synced sequentially. `refresh` returns "sync already
   running" rather than queueing. Sequential syncing is a deliberate ceiling: per
   account locks and parallel passes are the upgrade if a full pass gets slow.
-- **Empty-volume guard.** If `MAILDIR` is empty and the marker file is absent,
-  refuse to sync. Otherwise a mistyped or unmounted volume causes a full
-  re-download of every mailbox into a directory that will be shadowed the moment
-  the real volume appears. The first sync is opted into explicitly with
-  `INIT_MIRROR=1`.
+- **Empty-volume guard.** The question worth asking is the one the reference
+  implementation asked of `/Volumes/2TB`: is the storage actually there? An empty
+  directory answers it only together with two other signals.
+
+  The first is whether the directory is a mount point, which the program
+  determines by comparing its device number with its parent's. A mounted volume
+  that is empty is a genuine first run and syncs with no opt-in, so the shipped
+  compose path has no initialisation step. That check alone is not reliable
+  inside a container, though: a bind-mounted or named volume does not always
+  change device number from the container's point of view, so an actually
+  missing mail volume can still look mounted.
+
+  The second signal is a sentinel file (`mirror-exists`) written into the
+  `INDEX` directory once a sync pass leaves the maildir non-empty. It lives in
+  `INDEX`, a separate volume from the maildir, specifically so it survives the
+  maildir vanishing: an empty maildir next to a sentinel that remembers a
+  previous mirror means the mail volume went missing, not that this is day one,
+  and the guard refuses regardless of what the mount-point check says. It is
+  checked first, being the stronger evidence of the two.
+
+  Only once both signals come back negative — no sentinel, and not a mount
+  point — does the remaining case get refused: a plain empty directory, equally
+  a fresh maildir and a path whose volume was never mounted, since syncing into
+  it re-downloads every account into a directory that vanishes the moment the
+  mount appears. `INIT_MIRROR=1` overrides all of this for an operator who
+  really does want to start over in an ordinary directory. A maildir that
+  already holds anything is an existing mirror and is never questioned.
+
+  Residual gap: if the maildir and the index vanish together — the whole data
+  volume gone, not just the mail one — the sentinel disappears with it and this
+  still reads as a first run. There is no signal left inside the container to
+  catch that case.
+
+  An earlier version of this spec used a marker file inside the maildir itself
+  plus a mandatory flag on every first run. That threw away the signal: a
+  marker inside the same volume it is meant to detect the loss of cannot
+  distinguish "never initialised" from "volume missing", so the flag existed
+  only to paper over the ambiguity, and every operator paid a two-step first
+  run for it. The sentinel above avoids that by living on the other side of the
+  volume boundary, in `INDEX` rather than in the maildir, and by being a second
+  signal alongside the mount-point check rather than a replacement for it, so a
+  genuine first run still needs no flag.
+
 - **Timeouts and throttling.** Every sync has a deadline. Provider throttling is
   logged and left for the next tick, never retried in a tight loop.
 
@@ -171,6 +213,14 @@ RFC 6154 attributes, caching which mailbox is `\Junk` and which is `\Trash`
 whatever its display name. Gmail and iCloud both advertise these. Servers that do
 not fall back to a built-in list of common English spellings, and past that to the
 account's `exclude_folders`.
+
+Each mailbox name is translated from the server's own hierarchy delimiter —
+which the `LIST` response for that mailbox carries, and which is server- and
+namespace-specific (Dovecot's `.`, as in `INBOX.Trash`, is the common
+non-`/` case) — to the `/` a maildir path and a `folder:` query both use. A
+name returned verbatim never matches what `SubFolders Verbatim` actually
+wrote to disk on such a server, so the translation runs before the name is
+cached or excluded.
 
 This is the one place an IMAP client exists in the process. Its consequences are
 stated in section 5.
@@ -247,18 +297,23 @@ the supported path across every surface, and rules out a machine-to-machine
 token via `static_headers` exists but is beta and administrator-scoped, so it is
 not the basis for v1.
 
-The Go SDK's `auth` package provides the resource-server half: `RequireBearerToken`
-middleware, an RFC 9728 protected-resource metadata handler, and correctly formed
-401 responses. The authorization-server half is ours.
+The resource-server half is implemented directly rather than through the Go SDK's
+`auth` package: bearer verification, the 401 shape and both metadata documents are
+about twenty lines of standard library (`requireBearer` and `handlePRMetadata` in
+`main.go`/`oauth.go`). The 401 shape and the `resource` field are the two things
+Claude's connector flow is most sensitive to, and writing them directly keeps them
+visible and free of version coupling to the SDK's `auth` package. The SDK is still
+used for MCP itself. The authorization-server half is ours, as before.
 
 ```
-GET  /.well-known/oauth-protected-resource    SDK handler, RFC 9728
-GET  /.well-known/oauth-authorization-server  RFC 8414 metadata
-POST /register                                DCR, RFC 7591, JSON body
-GET  /authorize                               passphrase form and consent
-POST /authorize                               verify, issue authorization code
-POST /token                                   code and refresh grants, form-urlencoded
-POST /mcp                                     protected by RequireBearerToken
+GET  /.well-known/oauth-protected-resource     handlePRMetadata, RFC 9728
+GET  /.well-known/oauth-protected-resource/mcp handlePRMetadata, path variant Claude probes first
+GET  /.well-known/oauth-authorization-server   RFC 8414 metadata
+POST /register                                 DCR, RFC 7591, JSON body
+GET  /authorize                                passphrase form and consent
+POST /authorize                                verify, issue authorization code
+POST /token                                    code and refresh grants, form-urlencoded
+POST /mcp                                      protected by requireBearer
 ```
 
 Requirements taken directly from the documentation, all mandatory:
@@ -276,6 +331,15 @@ Requirements taken directly from the documentation, all mandatory:
 - The protected-resource metadata `resource` field must match the server URL
   exactly as the user enters it, which is what `PUBLIC_URL` is for.
 - Every endpoint answers well inside 10 seconds.
+
+**Client ID Metadata Documents** are accepted alongside DCR: a URL-shaped
+`client_id` is resolved by fetching the document it names, checking the
+document's own `client_id` equals that URL, and using its redirect URIs, with
+nothing persisted. The fetch happens before any authentication, so it runs
+behind an SSRF guard that resolves the host itself, refuses loopback, private,
+link-local and CGNAT addresses, and dials the checked IP directly. Claude
+prefers CIMD over DCR when the metadata advertises it, which keeps the
+registered-client store from growing with every connection.
 
 **Consent** is a single page: one passphrase field checked against
 `OAUTH_PASSPHRASE` in constant time, with a delay after a failed attempt. No

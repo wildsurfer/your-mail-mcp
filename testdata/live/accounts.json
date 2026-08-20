@@ -1,0 +1,13 @@
+{
+  "accounts": [
+    {
+      "name": "testbox",
+      "host": "greenmail",
+      "port": 3143,
+      "tls": "none",
+      "user": "tester",
+      "password": "${LIVE_PASS}",
+      "exclude_folders": ["Spam"]
+    }
+  ]
+}

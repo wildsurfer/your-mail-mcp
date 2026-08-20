@@ -1,0 +1,616 @@
+package main
+
+import (
+	"context"
+	"crypto/rand"
+	"crypto/sha256"
+	"crypto/subtle"
+	"encoding/base64"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"html/template"
+	"io"
+	"net"
+	"net/http"
+	"net/url"
+	"os"
+	"strings"
+	"sync"
+	"time"
+)
+
+type oauthClient struct {
+	// The map key in oauthState.Clients is the client id; it is not repeated here.
+	Name         string   `json:"name"`
+	RedirectURIs []string `json:"redirect_uris"`
+}
+
+type refreshToken struct {
+	ClientID string `json:"client_id"`
+}
+
+type oauthState struct {
+	Clients map[string]*oauthClient  `json:"clients"`
+	Refresh map[string]*refreshToken `json:"refresh"`
+}
+
+type authCode struct {
+	clientID  string
+	redirect  string
+	challenge string
+	expires   time.Time
+}
+
+type oauthServer struct {
+	path       string
+	publicURL  string
+	passphrase string
+	failDelay  time.Duration
+
+	// failMu serialises the failed-passphrase path in handleAuthorize. It is
+	// separate from mu so that a run of wrong guesses cannot block real
+	// traffic, but concurrent guesses still queue behind the delay instead
+	// of all paying it in parallel.
+	failMu sync.Mutex
+
+	// cimdHTTP fetches Client ID Metadata Documents; see newCIMDClient.
+	// allowPrivateCIMD exists for tests, whose metadata host is loopback.
+	cimdHTTP         *http.Client
+	allowPrivateCIMD bool
+
+	mu    sync.Mutex
+	state oauthState
+
+	// In-memory only. A restart drops access tokens and pending codes; the
+	// client gets a 401 and refreshes, which is its documented behaviour.
+	codes  map[string]authCode
+	access map[string]time.Time
+}
+
+func newOAuth(statePath, publicURL, passphrase string) (*oauthServer, error) {
+	if publicURL == "" {
+		return nil, fmt.Errorf("PUBLIC_URL is required for OAuth metadata")
+	}
+	if passphrase == "" {
+		return nil, fmt.Errorf("OAUTH_PASSPHRASE is required")
+	}
+	o := &oauthServer{
+		path:       statePath,
+		publicURL:  strings.TrimSuffix(publicURL, "/"),
+		passphrase: passphrase,
+		failDelay:  time.Second,
+		state:      oauthState{Clients: map[string]*oauthClient{}, Refresh: map[string]*refreshToken{}},
+		codes:      map[string]authCode{},
+		access:     map[string]time.Time{},
+	}
+	o.cimdHTTP = newCIMDClient(func() bool { return o.allowPrivateCIMD })
+	raw, err := os.ReadFile(statePath)
+	if err == nil {
+		if err := json.Unmarshal(raw, &o.state); err != nil {
+			return nil, fmt.Errorf("oauth state: %w", err)
+		}
+		if o.state.Clients == nil {
+			o.state.Clients = map[string]*oauthClient{}
+		}
+		if o.state.Refresh == nil {
+			o.state.Refresh = map[string]*refreshToken{}
+		}
+	} else if !os.IsNotExist(err) {
+		return nil, err
+	}
+	return o, nil
+}
+
+// save writes the state file. Callers hold o.mu.
+func (o *oauthServer) save() error {
+	raw, err := json.MarshalIndent(o.state, "", "  ")
+	if err != nil {
+		return err
+	}
+	tmp := o.path + ".tmp"
+	f, err := os.OpenFile(tmp, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+	if err != nil {
+		return err
+	}
+	if _, err := f.Write(raw); err != nil {
+		f.Close()
+		return err
+	}
+	if err := f.Sync(); err != nil {
+		f.Close()
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmp, o.path)
+}
+
+func randomToken() string {
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		panic(err) // crypto/rand failing is not a recoverable condition
+	}
+	return base64.RawURLEncoding.EncodeToString(b)
+}
+
+// maxRegisteredClients bounds unauthenticated dynamic client registration.
+// Without a cap, /register grows the state file (which lives on the index
+// volume, alongside the Xapian database) without bound, and every save()
+// runs under o.mu, the same lock validAccessToken takes on every MCP
+// request — so an unbounded flood of registrations also stalls ordinary
+// tool calls. A single-user deployment realistically registers a handful of
+// clients ever; this leaves generous room above that.
+const maxRegisteredClients = 500
+
+var errTooManyClients = errors.New("too many registered clients")
+
+func (o *oauthServer) registerClient(name string, redirects []string) (string, error) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if len(o.state.Clients) >= maxRegisteredClients {
+		return "", errTooManyClients
+	}
+	id := randomToken()
+	o.state.Clients[id] = &oauthClient{Name: name, RedirectURIs: redirects}
+	return id, o.save()
+}
+
+// cimdHTTP fetches Client ID Metadata Documents. Its dialer resolves the host
+// itself and refuses loopback, private, link-local and CGNAT addresses, then
+// dials the checked IP directly so a DNS answer cannot change between check
+// and connect. The fetch happens before any authentication — anyone can hand
+// /authorize a URL — so without this the endpoint is an open proxy into
+// whatever network the server sits on.
+func newCIMDClient(allowPrivate func() bool) *http.Client {
+	dialer := &net.Dialer{Timeout: 5 * time.Second}
+	return &http.Client{
+		Timeout: 10 * time.Second,
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse // a redirect is a refusal, not a hop
+		},
+		Transport: &http.Transport{
+			DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+				host, port, err := net.SplitHostPort(addr)
+				if err != nil {
+					return nil, err
+				}
+				ips, err := net.DefaultResolver.LookupIP(ctx, "ip", host)
+				if err != nil {
+					return nil, err
+				}
+				ip := ips[0]
+				if !allowPrivate() && isInternalIP(ip) {
+					return nil, fmt.Errorf("refusing to fetch client metadata from internal address %s", ip)
+				}
+				return dialer.DialContext(ctx, network, net.JoinHostPort(ip.String(), port))
+			},
+		},
+	}
+}
+
+var cgnat = func() *net.IPNet { _, n, _ := net.ParseCIDR("100.64.0.0/10"); return n }()
+
+func isInternalIP(ip net.IP) bool {
+	return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() ||
+		ip.IsLinkLocalMulticast() || ip.IsUnspecified() || cgnat.Contains(ip)
+}
+
+// cimdClient resolves a URL-shaped client_id into a client by fetching its
+// metadata document. Nothing is persisted: the binding is that the document's
+// own client_id equals the URL it was fetched from, so the same URL always
+// denotes the same client.
+func (o *oauthServer) cimdClient(ctx context.Context, clientID string) (*oauthClient, error) {
+	u, err := url.Parse(clientID)
+	if err != nil || u.Scheme != "https" || u.Host == "" || u.Fragment != "" {
+		return nil, fmt.Errorf("client_id is neither a registered client nor an https metadata URL")
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, clientID, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Accept", "application/json")
+	resp, err := o.cimdHTTP.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("fetching client metadata: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("client metadata fetch returned %d", resp.StatusCode)
+	}
+	var doc struct {
+		ClientID     string   `json:"client_id"`
+		ClientName   string   `json:"client_name"`
+		RedirectURIs []string `json:"redirect_uris"`
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 64<<10)).Decode(&doc); err != nil {
+		return nil, fmt.Errorf("client metadata: %w", err)
+	}
+	if doc.ClientID != clientID {
+		return nil, fmt.Errorf("client metadata document's client_id does not match the URL it was fetched from")
+	}
+	if len(doc.RedirectURIs) == 0 {
+		return nil, fmt.Errorf("client metadata document lists no redirect URIs")
+	}
+	for _, r := range doc.RedirectURIs {
+		p, err := url.Parse(r)
+		if err != nil || (p.Scheme != "https" && !isLoopback(p)) {
+			return nil, fmt.Errorf("client metadata document contains an invalid redirect URI")
+		}
+	}
+	name := doc.ClientName
+	if name == "" {
+		name = u.Host
+	}
+	return &oauthClient{Name: name, RedirectURIs: doc.RedirectURIs}, nil
+}
+
+func (o *oauthServer) client(id string) *oauthClient {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return o.state.Clients[id]
+}
+
+func writeJSON(w http.ResponseWriter, code int, v any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(code)
+	_ = json.NewEncoder(w).Encode(v)
+}
+
+func (o *oauthServer) handleRegister(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	// RFC 7591 registration is JSON; the token endpoint is form-encoded. They
+	// need different parsers, and mixing them up is a documented trap.
+	var req struct {
+		ClientName   string   `json:"client_name"`
+		RedirectURIs []string `json:"redirect_uris"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid_client_metadata"})
+		return
+	}
+	if len(req.RedirectURIs) == 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid_redirect_uri"})
+		return
+	}
+	for _, u := range req.RedirectURIs {
+		parsed, err := url.Parse(u)
+		if err != nil || parsed.Scheme == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid_redirect_uri"})
+			return
+		}
+		if parsed.Scheme != "https" && !isLoopback(parsed) {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid_redirect_uri"})
+			return
+		}
+	}
+	id, err := o.registerClient(req.ClientName, req.RedirectURIs)
+	if errors.Is(err, errTooManyClients) {
+		writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": "too_many_clients"})
+		return
+	}
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "server_error"})
+		return
+	}
+	writeJSON(w, http.StatusCreated, map[string]any{
+		"client_id":                  id,
+		"client_id_issued_at":        time.Now().Unix(),
+		"redirect_uris":              req.RedirectURIs,
+		"token_endpoint_auth_method": "none",
+		"grant_types":                []string{"authorization_code", "refresh_token"},
+		"response_types":             []string{"code"},
+	})
+}
+
+func isLoopback(u *url.URL) bool {
+	h := u.Hostname()
+	return h == "localhost" || h == "127.0.0.1" || h == "::1"
+}
+
+// redirectAllowed compares a redirect against the registered set. Loopback
+// entries match on scheme and path with the host and port ignored, because
+// native clients bind an ephemeral port per session and may use "localhost"
+// or a loopback IP literal interchangeably (RFC 8252). Everything else must
+// match scheme, host and path exactly.
+//
+// Userinfo, query strings and fragments on the candidate are rejected
+// outright rather than compared: OAuth redirect URIs are meant to match
+// their registration exactly (RFC 9700), a fragment on the redirect is
+// forbidden outright by RFC 6749 3.1.2, and neither loopback port variance
+// nor anything else in this project's flow needs any of the three, so their
+// presence is treated as malformed rather than matched loosely.
+func redirectAllowed(registered []string, candidate string) bool {
+	c, err := url.Parse(candidate)
+	if err != nil {
+		return false
+	}
+	if c.User != nil || c.RawQuery != "" || c.Fragment != "" {
+		return false
+	}
+	for _, r := range registered {
+		p, err := url.Parse(r)
+		if err != nil {
+			continue
+		}
+		if p.Scheme != c.Scheme || p.Path != c.Path {
+			continue
+		}
+		if isLoopback(p) && isLoopback(c) {
+			return true
+		}
+		if p.Host == c.Host {
+			return true
+		}
+	}
+	return false
+}
+
+func (o *oauthServer) handleASMetadata(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]any{
+		"issuer":                                o.publicURL,
+		"authorization_endpoint":                o.publicURL + "/authorize",
+		"token_endpoint":                        o.publicURL + "/token",
+		"registration_endpoint":                 o.publicURL + "/register",
+		"response_types_supported":              []string{"code"},
+		"grant_types_supported":                 []string{"authorization_code", "refresh_token"},
+		"code_challenge_methods_supported":      []string{"S256"},
+		"token_endpoint_auth_methods_supported": []string{"none"},
+		"client_id_metadata_document_supported": true,
+		"scopes_supported":                      []string{"mail.read"},
+	})
+}
+
+const codeTTL = 60 * time.Second
+
+var consentPage = template.Must(template.New("consent").Parse(`<!doctype html>
+<html><head><meta charset="utf-8"><title>Authorise access to your mail</title></head>
+<body>
+<h1>Authorise access to your mail</h1>
+<p>{{.ClientName}} is asking to read your mail. It cannot send, delete or change anything.</p>
+{{if .Failed}}<p><strong>That passphrase was not correct.</strong></p>{{end}}
+<form method="post" action="/authorize">
+  <input type="hidden" name="response_type" value="code">
+  <input type="hidden" name="client_id" value="{{.ClientID}}">
+  <input type="hidden" name="redirect_uri" value="{{.RedirectURI}}">
+  <input type="hidden" name="state" value="{{.State}}">
+  <input type="hidden" name="code_challenge" value="{{.Challenge}}">
+  <input type="hidden" name="code_challenge_method" value="S256">
+  <label>Passphrase <input type="password" name="passphrase" autofocus></label>
+  <button type="submit">Authorise</button>
+</form>
+</body></html>`))
+
+func (o *oauthServer) handleAuthorize(w http.ResponseWriter, r *http.Request) {
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+	var (
+		clientID  = r.Form.Get("client_id")
+		redirect  = r.Form.Get("redirect_uri")
+		state     = r.Form.Get("state")
+		challenge = r.Form.Get("code_challenge")
+		method    = r.Form.Get("code_challenge_method")
+	)
+	// Every check below happens before anything is echoed into a redirect. An
+	// unvalidated redirect_uri turned into a Location header is an open
+	// redirect, so failures here render an error page instead.
+	c := o.client(clientID)
+	if c == nil {
+		// A URL-shaped client_id is a Client ID Metadata Document: the client
+		// is described by a document it hosts, and nothing is registered here.
+		var err error
+		c, err = o.cimdClient(r.Context(), clientID)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "oauth: client metadata for %q: %v\n", clientID, err)
+			http.Error(w, "unknown client", http.StatusBadRequest)
+			return
+		}
+	}
+	if !redirectAllowed(c.RedirectURIs, redirect) {
+		http.Error(w, "redirect_uri does not match this client's registration", http.StatusBadRequest)
+		return
+	}
+	if r.Form.Get("response_type") != "code" {
+		http.Error(w, "response_type must be code", http.StatusBadRequest)
+		return
+	}
+	if method != "S256" || challenge == "" {
+		http.Error(w, "code_challenge_method must be S256", http.StatusBadRequest)
+		return
+	}
+
+	// The passphrase is typed into this page. If another site can frame it,
+	// a clickjacking overlay can steer that click and submission.
+	w.Header().Set("X-Frame-Options", "DENY")
+
+	data := struct {
+		ClientName, ClientID, RedirectURI, State, Challenge string
+		Failed                                              bool
+	}{c.Name, clientID, redirect, state, challenge, false}
+
+	if r.Method == http.MethodGet {
+		_ = consentPage.Execute(w, data)
+		return
+	}
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+
+	given := r.Form.Get("passphrase")
+	if subtle.ConstantTimeCompare([]byte(given), []byte(o.passphrase)) != 1 {
+		fmt.Fprintf(os.Stderr, "oauth: failed passphrase attempt from %s\n", r.RemoteAddr)
+		// Held across the sleep so concurrent guesses queue up instead of
+		// all paying the delay at once: the guess rate is capped no matter
+		// how many requests arrive in parallel.
+		o.failMu.Lock()
+		time.Sleep(o.failDelay)
+		o.failMu.Unlock()
+		data.Failed = true
+		w.WriteHeader(http.StatusUnauthorized)
+		_ = consentPage.Execute(w, data)
+		return
+	}
+
+	code := randomToken()
+	o.mu.Lock()
+	o.codes[code] = authCode{clientID: clientID, redirect: redirect, challenge: challenge, expires: time.Now().Add(codeTTL)}
+	o.mu.Unlock()
+
+	u, _ := url.Parse(redirect)
+	q := u.Query()
+	q.Set("code", code)
+	if state != "" {
+		q.Set("state", state)
+	}
+	u.RawQuery = q.Encode()
+	http.Redirect(w, r, u.String(), http.StatusFound)
+}
+
+const accessTTL = time.Hour
+
+func tokenError(w http.ResponseWriter, code string) {
+	// RFC 6749 error codes, not custom ones: clients key their refresh
+	// behaviour off invalid_grant specifically.
+	writeJSON(w, http.StatusBadRequest, map[string]string{"error": code})
+}
+
+func (o *oauthServer) handleToken(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	// The token endpoint is form-encoded; registration is JSON. A JSON-only
+	// body parser here returns 415 and breaks the flow.
+	if err := r.ParseForm(); err != nil {
+		tokenError(w, "invalid_request")
+		return
+	}
+	switch r.Form.Get("grant_type") {
+	case "authorization_code":
+		o.grantCode(w, r)
+	case "refresh_token":
+		o.grantRefresh(w, r)
+	default:
+		tokenError(w, "unsupported_grant_type")
+	}
+}
+
+func (o *oauthServer) grantCode(w http.ResponseWriter, r *http.Request) {
+	code := r.Form.Get("code")
+
+	o.mu.Lock()
+	ac, ok := o.codes[code]
+	delete(o.codes, code) // single use: dead on first attempt, whatever the outcome
+	o.mu.Unlock()
+
+	if !ok || time.Now().After(ac.expires) {
+		tokenError(w, "invalid_grant")
+		return
+	}
+	if ac.clientID != r.Form.Get("client_id") || ac.redirect != r.Form.Get("redirect_uri") {
+		tokenError(w, "invalid_grant")
+		return
+	}
+	sum := sha256.Sum256([]byte(r.Form.Get("code_verifier")))
+	computed := base64.RawURLEncoding.EncodeToString(sum[:])
+	if subtle.ConstantTimeCompare([]byte(computed), []byte(ac.challenge)) != 1 {
+		tokenError(w, "invalid_grant")
+		return
+	}
+	o.issue(w, ac.clientID)
+}
+
+func (o *oauthServer) grantRefresh(w http.ResponseWriter, r *http.Request) {
+	presented := r.Form.Get("refresh_token")
+	clientID := r.Form.Get("client_id")
+
+	o.mu.Lock()
+	rt, ok := o.state.Refresh[presented]
+	// A wrong client_id must not consume a token that is otherwise valid:
+	// unlike an authorization code, the refresh token itself is the secret,
+	// so a mismatched client_id here proves nothing worth burning it over,
+	// and doing so would let a stray or mistaken client_id deny the
+	// rightful holder its next refresh.
+	if ok && clientID != "" && clientID != rt.ClientID {
+		ok = false
+	}
+	var saveErr error
+	if ok {
+		// Rotation: the presented token dies in the same response that
+		// issues its replacement, which OAuth 2.1 requires for public
+		// clients.
+		delete(o.state.Refresh, presented)
+		saveErr = o.save()
+		if saveErr != nil {
+			// The deletion never reached disk. Put the token back so memory
+			// agrees with the last thing actually persisted: otherwise a
+			// restart before some later save reloads the token as valid
+			// again, while this process just told the client it was dead.
+			o.state.Refresh[presented] = rt
+		}
+	}
+	o.mu.Unlock()
+
+	if !ok {
+		tokenError(w, "invalid_grant")
+		return
+	}
+	if saveErr != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "server_error"})
+		return
+	}
+	o.issue(w, rt.ClientID)
+}
+
+func (o *oauthServer) issue(w http.ResponseWriter, clientID string) {
+	access, refresh := randomToken(), randomToken()
+
+	o.mu.Lock()
+	o.access[access] = time.Now().Add(accessTTL)
+	o.state.Refresh[refresh] = &refreshToken{ClientID: clientID}
+	err := o.save()
+	o.mu.Unlock()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "server_error"})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"access_token":  access,
+		"token_type":    "Bearer",
+		"expires_in":    int(accessTTL.Seconds()),
+		"refresh_token": refresh,
+		"scope":         "mail.read",
+	})
+}
+
+func (o *oauthServer) handlePRMetadata(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]any{
+		// Must match the URL the user types into Claude, path included.
+		"resource":                 o.publicURL + "/mcp",
+		"authorization_servers":    []string{o.publicURL},
+		"scopes_supported":         []string{"mail.read"},
+		"bearer_methods_supported": []string{"header"},
+	})
+}
+
+func (o *oauthServer) validAccessToken(token string) bool {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	exp, ok := o.access[token]
+	if !ok {
+		return false
+	}
+	if time.Now().After(exp) {
+		delete(o.access, token)
+		return false
+	}
+	return true
+}

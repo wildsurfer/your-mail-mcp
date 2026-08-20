@@ -366,7 +366,7 @@ One thing worth borrowing, though: its auth model is exactly the shape a remote 
 
 **No, but it narrows the gap, and it changes what to fork if the IMAP-direct route is taken.**
 
-If Ivan builds against live IMAP rather than notmuch, `bradsjm/mail-imap-mcp-rs` is now the best starting point in the survey: default-off write gating with runtime refusal, a published multi-arch image, an HTTP transport, a consolidated `apply_to_messages` tool surface, and a cancellable job model for long writes. It needs transport authentication added, which is a reverse proxy or ~200 lines.
+If this project were built against live IMAP rather than notmuch, `bradsjm/mail-imap-mcp-rs` is now the best starting point in the survey: default-off write gating with runtime refusal, a published multi-arch image, an HTTP transport, a consolidated `apply_to_messages` tool surface, and a cancellable job model for long writes. It needs transport authentication added, which is a reverse proxy or ~200 lines.
 
 What it does not change: the data-layer argument. iCloud offers no OAuth at all — app-specific passwords are the only option — so the OAuth work that looks daunting from outside is not on the critical path for his primary account. And having now read `oauth2.rs`, the Google/Microsoft refresh-grant is roughly 150 lines of well-understood code, not the hard part it appears to be.
 
