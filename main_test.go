@@ -141,6 +141,42 @@ func TestRefreshExclusionsAppliesConfiguredFoldersEvenWhenDiscoveryFails(t *test
 	}
 }
 
+// TestRefreshExclusionsLeavesGoodListOnFailedDiscovery covers N4: a failed
+// discovery tick called setExcluded with the empty list excludedFolders
+// falls back to when there is nothing else, wiping out whatever a previous
+// successful tick had established. One network blip on the discovery ticker
+// therefore turned junk/trash exclusion off silently until a later tick
+// happened to succeed. An account with no exclude_folders configured is the
+// case that degrades, since a configured list always wins regardless.
+func TestRefreshExclusionsLeavesGoodListOnFailedDiscovery(t *testing.T) {
+	cfg := &Config{Accounts: []Account{
+		{Name: "work", Host: "127.0.0.1", Port: 1, TLS: "none", User: "u", Password: "p"},
+	}}
+	srv := newServer(cfg, nil, t.TempDir())
+	srv.setExcluded("work", []string{"work/Spam", "work/Trash"})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	refreshExclusions(ctx, cfg, srv)
+
+	got := srv.excludedFor("work")
+	if len(got) != 2 || got[0] != "work/Spam" || got[1] != "work/Trash" {
+		t.Errorf("excluded = %v, want the previous good list left intact after a failed discovery tick", got)
+	}
+}
+
+// TestDiscoveryIntervalIsMuchLongerThanSync covers N5: discovery used to run
+// on every sync tick, adding a full IMAP LOGIN per account every few minutes
+// against providers that throttle. discoveryInterval is its own, much
+// longer, ticker (see run) rather than a re-run condition tied to sync,
+// since junk/trash folder names do not move; this guards against it
+// silently regressing back to a short interval.
+func TestDiscoveryIntervalIsMuchLongerThanSync(t *testing.T) {
+	if discoveryInterval < time.Hour {
+		t.Errorf("discoveryInterval = %v, want at least 1h so discovery does not add an IMAP login on every sync tick", discoveryInterval)
+	}
+}
+
 func TestRunTickerFiresUntilCancelled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	ticks := make(chan struct{}, 4)

@@ -158,14 +158,31 @@ func loadEnv() (*env, error) {
 	return e, nil
 }
 
+// discoveryInterval bounds how often SPECIAL-USE discovery re-runs. It is
+// its own ticker, well above e.SyncInterval: discovery does a full IMAP
+// LOGIN per account, and junk/trash folder names do not move, so retrying
+// every sync tick (every few minutes, by default) would roughly double the
+// login rate against every provider for no benefit. Hourly is ample.
+const discoveryInterval = time.Hour
+
 // refreshExclusions runs SPECIAL-USE discovery for every account and updates
-// srv's exclusions. Called once at startup and again on every sync tick (see
+// srv's exclusions. Called once at startup and again on its own ticker (see
 // run), so a discovery failure is not permanent for the life of the process.
+//
+// On a failed attempt for an account with no configured exclude_folders,
+// setExcluded is skipped rather than called with an empty list: special and
+// all are both nil on error, and excludedFolders would otherwise return no
+// folders, silently wiping out whatever a previous successful attempt had
+// established. An account with exclude_folders configured is unaffected
+// either way, since excludedFolders already prefers the configured list.
 func refreshExclusions(ctx context.Context, cfg *Config, srv *Server) {
 	for _, a := range cfg.Accounts {
 		special, all, err := discoverSpecialUse(ctx, a)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "special-use discovery: account %s: %v\n", a.Name, err)
+			if len(a.ExcludeFolders) == 0 {
+				continue
+			}
 		}
 		srv.setExcluded(a.Name, excludedFolders(a, special, all))
 	}
@@ -242,12 +259,15 @@ func run() error {
 	// Discover each account's junk and trash folders so search excludes them
 	// by default. A failing discovery is not fatal: the account simply has
 	// nothing excluded until the operator sets exclude_folders. Repeated on
-	// every sync tick (below) so an account that was unreachable at startup
+	// its own ticker (below) so an account that was unreachable at startup
 	// is not left unprotected for the rest of the process's life.
 	refreshExclusions(ctx, cfg, srv)
 
-	go runTicker(ctx, e.SyncInterval, func(ctx context.Context) {
+	go runTicker(ctx, discoveryInterval, func(ctx context.Context) {
 		refreshExclusions(ctx, cfg, srv)
+	})
+
+	go runTicker(ctx, e.SyncInterval, func(ctx context.Context) {
 		if _, err := syncer.Sync(ctx, "", ""); err != nil && !errors.Is(err, errSyncBusy) {
 			fmt.Fprintln(os.Stderr, "sync:", err)
 		}
