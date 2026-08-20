@@ -258,7 +258,7 @@ func run() error {
 
 	httpSrv := &http.Server{
 		Addr:              e.ListenAddr,
-		Handler:           newHTTPHandler(srv, o, m),
+		Handler:           newHTTPHandler(o, m),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 	go func() {
@@ -291,7 +291,7 @@ func requireBearer(o *oauthServer, next http.Handler) http.Handler {
 	})
 }
 
-func newHTTPHandler(srv *Server, o *oauthServer, m *mcp.Server) http.Handler {
+func newHTTPHandler(o *oauthServer, m *mcp.Server) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/.well-known/oauth-authorization-server", o.handleASMetadata)
 	mux.HandleFunc("/.well-known/oauth-protected-resource", o.handlePRMetadata)
