@@ -76,6 +76,13 @@ without changing the spec first.
   library, no mocking library.
 - `go vet ./...`, `go build ./...`, `go test ./...` and `go test -race ./...` all
   clean before a commit.
+- `go test -tags live -run TestLive -timeout 15m` runs the full stack — the
+  shipped container against a real IMAP server, every tool through the real
+  OAuth flow. It needs Docker, isolates itself under the compose project
+  `ymm-live`, and tears everything down including volumes. Run it before any
+  change to the sync path, the generated configs, or the Dockerfile: the class
+  of defect it catches (container toolchain skew, the real IMAP conversation)
+  is invisible to the rest of the suite.
 - `INBOX` is the only folder name that may be hardcoded; RFC 3501 requires it.
 - Pipeline depth is pinned to 1 and `SubFolders` to `Verbatim`, and `AuthMechs` is
   left unset. Those are settled; see the spec for why.
@@ -86,9 +93,10 @@ without changing the spec first.
 
 The gap between "tests pass" and "safe against a real mailbox" is these three:
 
-1. SPECIAL-USE discovery against a real Gmail and a real iCloud account, and
-   whether mbsync's Verbatim layout produces the folder paths the exclusion code
-   builds. Junk exclusion is a security property and it is unverified in the field.
+1. SPECIAL-USE discovery against a real Gmail and a real iCloud account. The
+   live test covers a real IMAP conversation end to end, but its test server
+   does not advertise SPECIAL-USE, so junk discovery against the providers that
+   do remains unverified in the field.
 2. A real connector handshake. The OAuth flow has only been exercised through
    `httptest`.
 3. The README quick start, followed literally on a clean machine.
