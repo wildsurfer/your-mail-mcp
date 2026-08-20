@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"sync"
@@ -132,6 +133,93 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
 	_ = json.NewEncoder(w).Encode(v)
+}
+
+func (o *oauthServer) handleRegister(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	// RFC 7591 registration is JSON; the token endpoint is form-encoded. They
+	// need different parsers, and mixing them up is a documented trap.
+	var req struct {
+		ClientName   string   `json:"client_name"`
+		RedirectURIs []string `json:"redirect_uris"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid_client_metadata"})
+		return
+	}
+	if len(req.RedirectURIs) == 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid_redirect_uri"})
+		return
+	}
+	for _, u := range req.RedirectURIs {
+		parsed, err := url.Parse(u)
+		if err != nil || parsed.Scheme == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid_redirect_uri"})
+			return
+		}
+		if parsed.Scheme != "https" && !isLoopback(parsed) {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid_redirect_uri"})
+			return
+		}
+	}
+	id, err := o.registerClient(req.ClientName, req.RedirectURIs)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "server_error"})
+		return
+	}
+	writeJSON(w, http.StatusCreated, map[string]any{
+		"client_id":                  id,
+		"client_id_issued_at":        time.Now().Unix(),
+		"redirect_uris":              req.RedirectURIs,
+		"token_endpoint_auth_method": "none",
+		"grant_types":                []string{"authorization_code", "refresh_token"},
+		"response_types":             []string{"code"},
+	})
+}
+
+func isLoopback(u *url.URL) bool {
+	h := u.Hostname()
+	return h == "localhost" || h == "127.0.0.1" || h == "::1"
+}
+
+// redirectAllowed compares a redirect against the registered set. Loopback
+// entries match on scheme and path with the host and port ignored, because
+// native clients bind an ephemeral port per session and may use "localhost"
+// or a loopback IP literal interchangeably (RFC 8252). Everything else must
+// match scheme, host and path exactly.
+//
+// Userinfo and query strings on the candidate are rejected outright rather
+// than compared: OAuth redirect URIs are meant to match their registration
+// exactly (RFC 9700), and neither loopback port variance nor anything else
+// in this project's flow needs either, so their presence is treated as
+// malformed rather than matched loosely.
+func redirectAllowed(registered []string, candidate string) bool {
+	c, err := url.Parse(candidate)
+	if err != nil {
+		return false
+	}
+	if c.User != nil || c.RawQuery != "" {
+		return false
+	}
+	for _, r := range registered {
+		p, err := url.Parse(r)
+		if err != nil {
+			continue
+		}
+		if p.Scheme != c.Scheme || p.Path != c.Path {
+			continue
+		}
+		if isLoopback(p) && isLoopback(c) {
+			return true
+		}
+		if p.Host == c.Host {
+			return true
+		}
+	}
+	return false
 }
 
 func (o *oauthServer) handleASMetadata(w http.ResponseWriter, _ *http.Request) {
