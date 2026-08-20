@@ -313,10 +313,19 @@ func requireBearer(o *oauthServer, next http.Handler) http.Handler {
 
 func newHTTPHandler(o *oauthServer, m *mcp.Server) http.Handler {
 	mux := http.NewServeMux()
+	// Discovery. Both documents are unauthenticated by necessity: a client
+	// has to read them before it can obtain a token, and they carry only
+	// endpoint URLs and supported algorithms.
+	//
+	// RFC 8414: where to register, authorize and exchange.
 	mux.HandleFunc("/.well-known/oauth-authorization-server", o.handleASMetadata)
-	mux.HandleFunc("/.well-known/oauth-protected-resource", o.handlePRMetadata)
-	// Claude probes this path variant before the bare one.
+	// RFC 9728: which authorization server protects this resource. The URL is
+	// built by inserting the well-known segment between the host and the
+	// resource's path, so for a resource at PUBLIC_URL/mcp the canonical
+	// location is the suffixed one. The bare path is the form for a resource
+	// at the root, served as a fallback for a client that does not insert.
 	mux.HandleFunc("/.well-known/oauth-protected-resource/mcp", o.handlePRMetadata)
+	mux.HandleFunc("/.well-known/oauth-protected-resource", o.handlePRMetadata)
 	mux.HandleFunc("/register", o.handleRegister)
 	mux.HandleFunc("/authorize", o.handleAuthorize)
 	mux.HandleFunc("/token", o.handleToken)
