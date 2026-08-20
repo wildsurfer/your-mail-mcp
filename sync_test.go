@@ -116,13 +116,18 @@ func TestGenMbsyncrcQuotesNegationPattern(t *testing.T) {
 
 func testSyncer(t *testing.T) (*Syncer, *[]string) {
 	t.Helper()
-	maildir := t.TempDir()
+	root := t.TempDir()
+	maildir := filepath.Join(root, "mail")
+	index := filepath.Join(root, "index")
 	// A non-empty maildir is an existing mirror, which the guard passes.
 	if err := os.MkdirAll(filepath.Join(maildir, "work"), 0o700); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.MkdirAll(index, 0o700); err != nil {
+		t.Fatal(err)
+	}
 	cfg := &Config{Accounts: []Account{{Name: "work"}, {Name: "home"}}}
-	s := newSyncer(cfg, maildir, "/tmp/mbsyncrc", nil)
+	s := newSyncer(cfg, maildir, index, "/tmp/mbsyncrc", nil)
 	var calls []string
 	s.runCmd = func(_ context.Context, _ string, args ...string) error {
 		calls = append(calls, args[len(args)-1])
@@ -158,6 +163,19 @@ func TestSyncContinuesAfterOneAccountFails(t *testing.T) {
 	}
 	if st["home"].LastSync.IsZero() {
 		t.Error("the healthy account has no last-sync time")
+	}
+}
+
+// TestSyncFailsWhenEveryAttemptedAccountFails covers F7: only a
+// context-cancellation error stopped Sync from returning nil, so a pass
+// where every attempted account failed still reported success — refreshTool
+// then told the model "0 new message(s)" for what was really an outage,
+// indistinguishable from a quiet inbox. testSyncer's runCmd fails for any
+// target beginning "work".
+func TestSyncFailsWhenEveryAttemptedAccountFails(t *testing.T) {
+	s, _ := testSyncer(t)
+	if _, err := s.Sync(context.Background(), "work", ""); err == nil {
+		t.Fatal("want an error when the only attempted account fails")
 	}
 }
 
@@ -211,6 +229,69 @@ func TestSyncRefusesAnEmptyPlainDirectory(t *testing.T) {
 	if _, err := s.Sync(context.Background(), "", ""); err != nil {
 		t.Fatalf("INIT_MIRROR should allow it: %v", err)
 	}
+}
+
+// TestCheckInitialisedSentinel covers F3: the mount-point check alone does
+// not reliably tell an actually-missing mail volume from a genuine first run
+// inside a container, where a bind-mounted or named volume does not always
+// change device number from the container's point of view. mirrorSentinel is
+// the second, container-effective signal: a marker in the INDEX directory —
+// a separate volume from the maildir, so it survives the maildir vanishing —
+// recording that a previous pass left the maildir non-empty.
+func TestCheckInitialisedSentinel(t *testing.T) {
+	t.Run("sentinel present refuses an empty maildir even when it looks mounted", func(t *testing.T) {
+		s, _ := testSyncer(t)
+		if err := os.RemoveAll(filepath.Join(s.maildir, "work")); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(s.index, mirrorSentinel), nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		// Stubbed true: the mount-point check alone is not reliable inside a
+		// container (a bind-mounted or named volume does not always change
+		// device number from the container's point of view), so this must
+		// still refuse on the sentinel's word alone.
+		s.mountPoint = func(string) bool { return true }
+		if _, err := s.Sync(context.Background(), "", ""); err == nil {
+			t.Fatal("want a refusal: the sentinel says a mirror existed here before")
+		}
+	})
+
+	t.Run("no sentinel proceeds on a mount-point stub without INIT_MIRROR", func(t *testing.T) {
+		s, _ := testSyncer(t)
+		if err := os.RemoveAll(filepath.Join(s.maildir, "work")); err != nil {
+			t.Fatal(err)
+		}
+		s.mountPoint = func(string) bool { return true }
+		if _, err := s.Sync(context.Background(), "", ""); err != nil {
+			t.Fatalf("no sentinel + a real mount point should proceed with no opt-in: %v", err)
+		}
+	})
+
+	t.Run("no sentinel still proceeds under INIT_MIRROR", func(t *testing.T) {
+		s, _ := testSyncer(t)
+		if err := os.RemoveAll(filepath.Join(s.maildir, "work")); err != nil {
+			t.Fatal(err)
+		}
+		s.initMirror = true
+		if _, err := s.Sync(context.Background(), "", ""); err != nil {
+			t.Fatalf("no sentinel + INIT_MIRROR should proceed: %v", err)
+		}
+	})
+
+	t.Run("a successful pass over a non-empty maildir writes the sentinel", func(t *testing.T) {
+		s, _ := testSyncer(t)
+		sentinel := filepath.Join(s.index, mirrorSentinel)
+		if _, err := os.Stat(sentinel); err == nil {
+			t.Fatal("test precondition: sentinel should not exist yet")
+		}
+		if _, err := s.Sync(context.Background(), "home", ""); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := os.Stat(sentinel); err != nil {
+			t.Errorf("sentinel was not written after a successful pass: %v", err)
+		}
+	})
 }
 
 func TestSyncAcceptsAnEmptyMaildirWithoutCeremony(t *testing.T) {
@@ -292,6 +373,28 @@ func TestDiscoverSpecialUseRespectsContextCancellation(t *testing.T) {
 	case <-done:
 	case <-time.After(3 * time.Second):
 		t.Fatal("discoverSpecialUse did not return promptly after its context was cancelled; a stalled connection blocks it")
+	}
+}
+
+// TestTranslateDelimConvertsToSlash covers F2: discoverSpecialUse used to
+// return b.Mailbox verbatim, so a server whose hierarchy delimiter is not
+// "/" (Dovecot's "." in INBOX.Trash is the common case) returned a name
+// that never matches the "/" path SubFolders Verbatim actually wrote to
+// disk, and excludedFolders' folder: query could never hit it.
+func TestTranslateDelimConvertsToSlash(t *testing.T) {
+	cases := []struct {
+		name  string
+		delim rune
+		want  string
+	}{
+		{"INBOX.Trash", '.', "INBOX/Trash"},
+		{"INBOX/Trash", '/', "INBOX/Trash"},
+		{"INBOX.Trash", 0, "INBOX.Trash"},
+	}
+	for _, c := range cases {
+		if got := translateDelim(c.name, c.delim); got != c.want {
+			t.Errorf("translateDelim(%q, %q) = %q, want %q", c.name, c.delim, got, c.want)
+		}
 	}
 }
 
@@ -409,7 +512,7 @@ func TestReindexSurvivesAMissingDatabase(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	s := newSyncer(&Config{Accounts: []Account{{Name: "acct"}}}, maildir, "/tmp/none", newNotmuch(config))
+	s := newSyncer(&Config{Accounts: []Account{{Name: "acct"}}}, maildir, index, "/tmp/none", newNotmuch(config))
 	s.runCmd = func(context.Context, string, ...string) error { return nil }
 	if _, err := s.Sync(context.Background(), "", ""); err != nil {
 		t.Fatalf("first sync against an empty index failed: %v", err)

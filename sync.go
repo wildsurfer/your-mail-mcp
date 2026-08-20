@@ -157,15 +157,27 @@ var errSyncBusy = errors.New("sync already running")
 // Syncer runs mbsync and reindexes. running.TryLock is the single-sync-at-a-time
 // guard: two overlapping mbsync runs against the same maildir corrupt the near
 // side, so a second concurrent call is refused rather than queued.
+// mirrorSentinel is the marker file written into the index directory after a
+// sync pass leaves the maildir non-empty. It lives in INDEX rather than in
+// the maildir itself deliberately: a marker inside the maildir vanishes
+// along with it if that volume goes missing, which is exactly the case it
+// needs to detect, so it has to live on the other side of the volume
+// boundary to still be there when the maildir isn't.
+const mirrorSentinel = "mirror-exists"
+
 type Syncer struct {
 	cfg          *Config
 	maildir      string
+	index        string
 	mbsyncConfig string
 	initMirror   bool
 	timeout      time.Duration
 
 	runCmd  func(ctx context.Context, name string, args ...string) error
 	reindex func(ctx context.Context) (int, error)
+	// mountPoint defaults to the package-level isMountPoint; overridden in
+	// tests, since a real mount point is not reproducible in one.
+	mountPoint func(path string) bool
 
 	running sync.Mutex
 
@@ -173,12 +185,14 @@ type Syncer struct {
 	status map[string]AccountStatus
 }
 
-func newSyncer(cfg *Config, maildir, mbsyncConfig string, nm *Notmuch) *Syncer {
+func newSyncer(cfg *Config, maildir, index, mbsyncConfig string, nm *Notmuch) *Syncer {
 	return &Syncer{
 		cfg:          cfg,
 		maildir:      maildir,
+		index:        index,
 		mbsyncConfig: mbsyncConfig,
-		timeout:      15 * time.Minute,
+		timeout:      time.Hour,
+		mountPoint:   isMountPoint,
 		status:       map[string]AccountStatus{},
 		runCmd: func(ctx context.Context, name string, args ...string) error {
 			cmd := exec.CommandContext(ctx, name, args...)
@@ -223,6 +237,8 @@ func (s *Syncer) Sync(ctx context.Context, account, folder string) (int, error) 
 		return 0, err
 	}
 
+	var attempted, failed int
+	var lastErr error
 	for _, a := range s.cfg.Accounts {
 		if account != "" && a.Name != account {
 			continue
@@ -244,7 +260,10 @@ func (s *Syncer) Sync(ctx context.Context, account, folder string) (int, error) 
 		err := s.runCmd(accountCtx, "mbsync", "-c", s.mbsyncConfig, target)
 		cancel()
 		s.record(a.Name, err)
+		attempted++
 		if err != nil {
+			failed++
+			lastErr = err
 			// A failing account is skipped, not silent: anyone watching
 			// container logs should see it without knowing to call folders.
 			fmt.Fprintf(os.Stderr, "sync: account %s: %v\n", a.Name, err)
@@ -253,7 +272,28 @@ func (s *Syncer) Sync(ctx context.Context, account, folder string) (int, error) 
 			return 0, ctx.Err()
 		}
 	}
+	// A pass where every attempted account failed is not a success — without
+	// this, it looked exactly like a quiet inbox to refreshTool, which
+	// reports "0 new message(s)" for both. A multi-account pass with at
+	// least one success keeps today's skip-and-continue semantics.
+	if attempted > 0 && failed == attempted {
+		return 0, lastErr
+	}
+	s.markMirrored()
 	return s.reindex(ctx)
+}
+
+// markMirrored records, in the index directory, that a mirror exists at
+// s.maildir — see mirrorSentinel and checkInitialised. Best-effort: a
+// failure to write it just means the next empty-maildir check falls back to
+// the mount-point heuristic, not a failure of the sync pass that already
+// succeeded.
+func (s *Syncer) markMirrored() {
+	entries, err := os.ReadDir(s.maildir)
+	if err != nil || len(entries) == 0 {
+		return
+	}
+	_ = os.WriteFile(filepath.Join(s.index, mirrorSentinel), nil, 0o600)
 }
 
 // checkInitialised refuses to sync into a maildir that looks like a missing
@@ -261,18 +301,39 @@ func (s *Syncer) Sync(ctx context.Context, account, folder string) (int, error) 
 //
 // The question that matters is the one the reference implementation asked of
 // /Volumes/2TB: is the storage actually there? An empty directory answers it
-// only in combination with whether that directory is a mount point. A mounted
-// volume that is empty is a genuine first run and needs no ceremony. A plain
-// empty directory is ambiguous — it is equally a fresh maildir and a path
-// typo whose real storage was never mounted — and that is the only case worth
-// stopping for, since syncing into it re-downloads every account into a
-// directory that vanishes the moment the mount appears.
+// only in combination with two other signals. The first is whether that
+// directory is a mount point: a mounted volume that is empty is a genuine
+// first run and needs no ceremony. That check alone is not enough in a
+// container, though, where a bind-mounted or named volume does not reliably
+// change device number from the container's point of view, so an actually
+// missing mail volume can still look mounted. The second signal, checked
+// first because it is the stronger evidence of the two, is mirrorSentinel: a
+// marker in the INDEX directory (a separate volume, so it survives the
+// maildir vanishing) recording that a previous pass here left the maildir
+// non-empty. An empty maildir next to that memory means the mail volume went
+// missing, not that this is day one — refuse regardless of what the
+// mount-point check says. Only once both signals come back negative does the
+// remaining case — a plain empty directory, equally a fresh maildir and a
+// path typo whose real storage was never mounted — get refused, since
+// syncing into it re-downloads every account into a directory that vanishes
+// the moment the mount appears.
+//
+// Residual gap: if the maildir and the index vanish together (the whole data
+// volume is gone, not just the mail one), the sentinel disappears with it and
+// this still reads as a first run. There is no signal left inside the
+// container to catch that case.
 func (s *Syncer) checkInitialised() error {
 	if _, err := os.Stat(s.maildir); err != nil {
 		return fmt.Errorf("maildir %s: %w", s.maildir, err)
 	}
 	entries, err := os.ReadDir(s.maildir)
-	if s.initMirror || isMountPoint(s.maildir) || (err == nil && len(entries) > 0) {
+	if s.initMirror || (err == nil && len(entries) > 0) {
+		return nil
+	}
+	if _, err := os.Stat(filepath.Join(s.index, mirrorSentinel)); err == nil {
+		return fmt.Errorf("maildir %s is empty but index %s remembers a previous mirror: refusing to sync, since this looks like a missing volume rather than a first run. Mount the storage there, or set INIT_MIRROR=1 if it really is meant to start over", s.maildir, s.index)
+	}
+	if s.mountPoint(s.maildir) {
 		return nil
 	}
 	return fmt.Errorf("maildir %s is an empty plain directory, not a mount point: refusing to sync, since a path whose volume was never mounted looks exactly like this and would trigger a full re-download. Mount the storage there, or set INIT_MIRROR=1 if it really is meant to be a directory on this filesystem", s.maildir)
@@ -384,16 +445,30 @@ func discoverSpecialUse(ctx context.Context, a Account) (special, all []string, 
 		return nil, nil, err
 	}
 	for _, b := range boxes {
-		all = append(all, b.Mailbox)
+		name := translateDelim(b.Mailbox, b.Delim)
+		all = append(all, name)
 		for _, attr := range b.Attrs {
 			if attr == imap.MailboxAttrJunk || attr == imap.MailboxAttrTrash {
-				special = append(special, b.Mailbox)
+				special = append(special, name)
 				break
 			}
 		}
 	}
 	_ = c.Logout().Wait()
 	return special, all, nil
+}
+
+// translateDelim converts an IMAP mailbox name's hierarchy delimiter — the
+// character the LIST response for that mailbox reported, which is server
+// and namespace specific (Dovecot's "." in INBOX.Trash, most others' "/") —
+// to the "/" a maildir path and a notmuch folder: query both use. delim == 0
+// means the server did not report one; that and delim == '/' are both
+// no-ops.
+func translateDelim(name string, delim rune) string {
+	if delim == 0 || delim == '/' {
+		return name
+	}
+	return strings.ReplaceAll(name, string(delim), "/")
 }
 
 // excludedFolders returns the folders to keep out of search for one account, as
