@@ -18,14 +18,13 @@ import (
 )
 
 type oauthClient struct {
-	ID           string   `json:"id"`
+	// The map key in oauthState.Clients is the client id; it is not repeated here.
 	Name         string   `json:"name"`
 	RedirectURIs []string `json:"redirect_uris"`
 }
 
 type refreshToken struct {
-	ClientID string    `json:"client_id"`
-	Issued   time.Time `json:"issued"`
+	ClientID string `json:"client_id"`
 }
 
 type oauthState struct {
@@ -145,7 +144,7 @@ func (o *oauthServer) registerClient(name string, redirects []string) (string, e
 		return "", errTooManyClients
 	}
 	id := randomToken()
-	o.state.Clients[id] = &oauthClient{ID: id, Name: name, RedirectURIs: redirects}
+	o.state.Clients[id] = &oauthClient{Name: name, RedirectURIs: redirects}
 	return id, o.save()
 }
 
@@ -469,7 +468,7 @@ func (o *oauthServer) issue(w http.ResponseWriter, clientID string) {
 
 	o.mu.Lock()
 	o.access[access] = time.Now().Add(accessTTL)
-	o.state.Refresh[refresh] = &refreshToken{ClientID: clientID, Issued: time.Now()}
+	o.state.Refresh[refresh] = &refreshToken{ClientID: clientID}
 	err := o.save()
 	o.mu.Unlock()
 	if err != nil {

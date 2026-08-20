@@ -72,7 +72,7 @@ func genMbsyncrc(cfg *Config, maildir string) string {
 
 		b.WriteString("\nIMAPAccount " + a.Name + "\n")
 		b.WriteString("Host " + a.Host + "\n")
-		b.WriteString("Port " + itoa(a.Port) + "\n")
+		b.WriteString("Port " + strconv.Itoa(a.Port) + "\n")
 		b.WriteString("User " + a.User + "\n")
 		b.WriteString("Pass " + quoteMbsync(a.Password) + "\n")
 		b.WriteString("TLSType " + tls + "\n")
@@ -115,8 +115,6 @@ func quoteMbsync(s string) string {
 	return `"` + r.Replace(s) + `"`
 }
 
-func itoa(i int) string { return strconv.Itoa(i) }
-
 // isMountPoint reports whether path is the root of a mounted filesystem, by
 // comparing its device number with its parent's. A bind mount, a Docker volume
 // and a mounted disk all differ from their parent; a plain directory does not.
@@ -139,12 +137,6 @@ func isMountPoint(path string) bool {
 		return false
 	}
 	return a.Dev != b.Dev
-}
-
-// isEmptyDir reports whether path is a directory with nothing in it.
-func isEmptyDir(path string) bool {
-	entries, err := os.ReadDir(path)
-	return err == nil && len(entries) == 0
 }
 
 var errSyncBusy = errors.New("sync already running")
@@ -256,7 +248,8 @@ func (s *Syncer) checkInitialised() error {
 	if _, err := os.Stat(s.maildir); err != nil {
 		return fmt.Errorf("maildir %s: %w", s.maildir, err)
 	}
-	if s.initMirror || isMountPoint(s.maildir) || !isEmptyDir(s.maildir) {
+	entries, err := os.ReadDir(s.maildir)
+	if s.initMirror || isMountPoint(s.maildir) || (err == nil && len(entries) > 0) {
 		return nil
 	}
 	return fmt.Errorf("maildir %s is an empty plain directory, not a mount point: refusing to sync, since a path whose volume was never mounted looks exactly like this and would trigger a full re-download. Mount the storage there, or set INIT_MIRROR=1 if it really is meant to be a directory on this filesystem", s.maildir)

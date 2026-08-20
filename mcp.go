@@ -215,20 +215,14 @@ func (s *Server) buildQuery(ctx context.Context, q, account string, includeExclu
 // silently scopes to a path nothing matches, and the caller cannot tell a
 // mistyped name from an account with no mail.
 func (s *Server) knownAccount(name string) error {
-	for _, a := range s.cfg.Accounts {
+	names := make([]string, len(s.cfg.Accounts))
+	for i, a := range s.cfg.Accounts {
 		if a.Name == name {
 			return nil
 		}
-	}
-	return fmt.Errorf("unknown account %q; configured accounts are %s", name, s.accountNames())
-}
-
-func (s *Server) accountNames() string {
-	names := make([]string, len(s.cfg.Accounts))
-	for i, a := range s.cfg.Accounts {
 		names[i] = a.Name
 	}
-	return strings.Join(names, ", ")
+	return fmt.Errorf("unknown account %q; configured accounts are %s", name, strings.Join(names, ", "))
 }
 
 func text(payload string) *mcp.CallToolResult {
@@ -240,20 +234,25 @@ func text(payload string) *mcp.CallToolResult {
 }
 
 func (s *Server) searchTool(ctx context.Context, _ *mcp.CallToolRequest, a searchArgs) (*mcp.CallToolResult, any, error) {
+	limit := a.Limit
+	if limit <= 0 {
+		limit = 50
+	}
+	args := []string{"search", "--format=json", "--output=summary", fmt.Sprintf("--limit=%d", limit)}
+	if a.Offset > 0 {
+		args = append(args, fmt.Sprintf("--offset=%d", a.Offset))
+	}
+	return s.runQuery(ctx, queryArgs{Query: a.Query, Account: a.Account, IncludeExcluded: a.IncludeExcluded}, args...)
+}
+
+// runQuery is the shape the query tools share: build the query, run notmuch,
+// wrap the output. Only the notmuch arguments differ.
+func (s *Server) runQuery(ctx context.Context, a queryArgs, nmArgs ...string) (*mcp.CallToolResult, any, error) {
 	q, err := s.buildQuery(ctx, a.Query, a.Account, a.IncludeExcluded)
 	if err != nil {
 		return nil, nil, err
 	}
-	args := []string{"search", "--format=json", "--output=summary"}
-	if a.Limit > 0 {
-		args = append(args, fmt.Sprintf("--limit=%d", a.Limit))
-	} else {
-		args = append(args, "--limit=50")
-	}
-	if a.Offset > 0 {
-		args = append(args, fmt.Sprintf("--offset=%d", a.Offset))
-	}
-	out, err := s.nm.run(ctx, append(args, q)...)
+	out, err := s.nm.run(ctx, append(nmArgs, q)...)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -261,27 +260,11 @@ func (s *Server) searchTool(ctx context.Context, _ *mcp.CallToolRequest, a searc
 }
 
 func (s *Server) idsTool(ctx context.Context, _ *mcp.CallToolRequest, a queryArgs) (*mcp.CallToolResult, any, error) {
-	q, err := s.buildQuery(ctx, a.Query, a.Account, a.IncludeExcluded)
-	if err != nil {
-		return nil, nil, err
-	}
-	out, err := s.nm.run(ctx, "search", "--format=json", "--output=messages", q)
-	if err != nil {
-		return nil, nil, err
-	}
-	return text(string(out)), nil, nil
+	return s.runQuery(ctx, a, "search", "--format=json", "--output=messages")
 }
 
 func (s *Server) filesTool(ctx context.Context, _ *mcp.CallToolRequest, a queryArgs) (*mcp.CallToolResult, any, error) {
-	q, err := s.buildQuery(ctx, a.Query, a.Account, a.IncludeExcluded)
-	if err != nil {
-		return nil, nil, err
-	}
-	out, err := s.nm.run(ctx, "search", "--output=files", q)
-	if err != nil {
-		return nil, nil, err
-	}
-	return text(string(out)), nil, nil
+	return s.runQuery(ctx, a, "search", "--output=files")
 }
 
 func (s *Server) countTool(ctx context.Context, _ *mcp.CallToolRequest, a queryArgs) (*mcp.CallToolResult, any, error) {

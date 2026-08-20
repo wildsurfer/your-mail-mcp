@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"maps"
 	"os"
 	"os/exec"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -67,11 +69,8 @@ func validateQuery(q string) error {
 			return nil
 		}
 		p := strings.ToLower(w[:i])
-		if strings.ContainsAny(p, `"'()`) {
-			return nil
-		}
 		if !notmuchPrefixes[p] {
-			return fmt.Errorf("unknown query prefix %q; valid prefixes are from, to, subject, tag, is, id, thread, path, folder, date, attachment, mimetype, body, property, lastmod", p)
+			return fmt.Errorf("unknown query prefix %q; valid prefixes are %s", p, strings.Join(slices.Sorted(maps.Keys(notmuchPrefixes)), ", "))
 		}
 		return nil
 	})
