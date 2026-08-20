@@ -91,8 +91,9 @@ PERSONAL_PASS=your-icloud-app-specific-password
 `OAUTH_PASSPHRASE` is the only credential between the internet and your mail
 in cases 2 and 3. Treat it accordingly.
 
-Both `.env` and `accounts.json` are in `.gitignore`. If you copy this setup
-somewhere else, keep them out of version control there too.
+These two files hold your mail passwords. If you ever put this directory
+under version control or into a backup that leaves the machine, treat them
+accordingly.
 
 ---
 
