@@ -267,11 +267,18 @@ func run() error {
 		refreshExclusions(ctx, cfg, srv)
 	})
 
-	go runTicker(ctx, e.SyncInterval, func(ctx context.Context) {
+	sync := func(ctx context.Context) {
 		if _, err := syncer.Sync(ctx, "", ""); err != nil && !errors.Is(err, errSyncBusy) {
 			fmt.Fprintln(os.Stderr, "sync:", err)
 		}
-	})
+	}
+	// Sync once at startup, not only on the tick. Without this the mailbox
+	// stays empty for a whole SYNC_INTERVAL after the server comes up, which
+	// on a first run looks exactly like a broken configuration. It runs in a
+	// goroutine because a first mirror of a large mailbox takes far longer
+	// than the listener should wait to open.
+	go sync(ctx)
+	go runTicker(ctx, e.SyncInterval, sync)
 
 	m := mcp.NewServer(&mcp.Implementation{Name: "your-mail-mcp", Version: "0.1.0"}, nil)
 	srv.registerTools(m)

@@ -75,7 +75,19 @@ func genMbsyncrc(cfg *Config, maildir string) string {
 		b.WriteString("Port " + strconv.Itoa(a.Port) + "\n")
 		b.WriteString("User " + a.User + "\n")
 		b.WriteString("Pass " + quoteMbsync(a.Password) + "\n")
-		b.WriteString("TLSType " + tls + "\n")
+		// SSLType, not TLSType: TLSType was introduced in isync 1.5, and Debian
+		// bookworm — the image's base — ships 1.4.4, which rejects the file
+		// outright. 1.5 still accepts SSLType and only prints a deprecation
+		// notice, so this is the one spelling that works on both.
+		b.WriteString("SSLType " + tls + "\n")
+		if a.TLS == "none" {
+			// mbsync refuses to send LOGIN over an unencrypted connection
+			// unless told to, which leaves tls:none unable to authenticate at
+			// all. Someone who sets tls:none has already accepted that the
+			// password crosses the network in clear, so say so explicitly
+			// rather than shipping an option that cannot work.
+			b.WriteString("AuthMechs LOGIN\n")
+		}
 		// Pinned: providers throttle above one command in flight, and the cost
 		// is first-sync speed only.
 		b.WriteString("PipelineDepth 1\n")
@@ -176,9 +188,13 @@ func newSyncer(cfg *Config, maildir, mbsyncConfig string, nm *Notmuch) *Syncer {
 			return nil
 		},
 		reindex: func(ctx context.Context) (int, error) {
+			// A missing database is the normal state on a first run: notmuch
+			// new is what creates it. The count is only here to report how
+			// many messages arrived, so failing to count must not stop the
+			// indexing that the whole sync exists to do.
 			before, err := nm.count(ctx, "*")
 			if err != nil {
-				return 0, err
+				before = 0
 			}
 			if _, err := nm.run(ctx, "new", "--quiet"); err != nil {
 				return 0, err
@@ -209,6 +225,12 @@ func (s *Syncer) Sync(ctx context.Context, account, folder string) (int, error) 
 	for _, a := range s.cfg.Accounts {
 		if account != "" && a.Name != account {
 			continue
+		}
+		// mbsync creates mailboxes inside a store, but not the store's own
+		// root, so a first run against a fresh volume fails with "cannot open
+		// store" until this directory exists.
+		if err := os.MkdirAll(filepath.Join(s.maildir, a.Name), 0o700); err != nil {
+			return 0, err
 		}
 		target := a.Name
 		if folder != "" {

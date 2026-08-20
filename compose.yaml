@@ -9,8 +9,8 @@ services:
       PUBLIC_URL: ${PUBLIC_URL}
       OAUTH_PASSPHRASE: ${OAUTH_PASSPHRASE}
       SYNC_INTERVAL: 5m
-      WORK_PASS: ${WORK_PASS}
-      PERSONAL_PASS: ${PERSONAL_PASS}
+      WORK_PASS: ${WORK_PASS:-}
+      PERSONAL_PASS: ${PERSONAL_PASS:-}
     volumes:
       - ./accounts.json:/config/accounts.json:ro
       - mail:/mail

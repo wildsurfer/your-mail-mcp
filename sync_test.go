@@ -6,6 +6,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -35,8 +36,13 @@ func TestGenMbsyncrcIsPullOnlyForEveryAccount(t *testing.T) {
 	if strings.Contains(out, "AuthMechs") {
 		t.Error("AuthMechs must be left unset so mbsync negotiates")
 	}
-	if !strings.Contains(out, "TLSType IMAPS") || !strings.Contains(out, "TLSType STARTTLS") {
+	if !strings.Contains(out, "SSLType IMAPS") || !strings.Contains(out, "SSLType STARTTLS") {
 		t.Error("both TLS modes should appear, one per account")
+	}
+	// TLSType only exists in isync 1.5+, and the shipped image runs 1.4.4,
+	// which refuses to parse a file containing it at all.
+	if strings.Contains(out, "TLSType") {
+		t.Error("TLSType is unknown to isync 1.4.x; the generated config must say SSLType")
 	}
 	if !strings.Contains(out, `Patterns "INBOX" "Archive"`) {
 		t.Error("per-account patterns are missing or not quoted")
@@ -379,4 +385,70 @@ func contains(list []string, s string) bool {
 		}
 	}
 	return false
+}
+
+func TestReindexSurvivesAMissingDatabase(t *testing.T) {
+	if _, err := exec.LookPath("notmuch"); err != nil {
+		t.Skip("notmuch is not installed")
+	}
+	// A first run has an empty index directory: notmuch new is what creates
+	// the database, so anything that reads it beforehand fails.
+	root := t.TempDir()
+	maildir := filepath.Join(root, "mail")
+	index := filepath.Join(root, "index")
+	for _, sub := range []string{"cur", "new", "tmp"} {
+		if err := os.MkdirAll(filepath.Join(maildir, "acct", "INBOX", sub), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.MkdirAll(index, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	config := filepath.Join(root, "notmuch-config")
+	if err := os.WriteFile(config, []byte(genNotmuchConfig(maildir, index)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	s := newSyncer(&Config{Accounts: []Account{{Name: "acct"}}}, maildir, "/tmp/none", newNotmuch(config))
+	s.runCmd = func(context.Context, string, ...string) error { return nil }
+	if _, err := s.Sync(context.Background(), "", ""); err != nil {
+		t.Fatalf("first sync against an empty index failed: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(index, "xapian")); err != nil {
+		t.Errorf("notmuch new did not create the database: %v", err)
+	}
+}
+
+func TestSyncCreatesTheAccountDirectory(t *testing.T) {
+	s, _ := testSyncer(t)
+	// mbsync opens the store root; it does not create it. A fresh volume has
+	// nothing under the maildir, so the server has to make it.
+	if _, err := os.Stat(filepath.Join(s.maildir, "home")); err == nil {
+		t.Fatal("test precondition: the account directory should not exist yet")
+	}
+	if _, err := s.Sync(context.Background(), "home", ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(s.maildir, "home")); err != nil {
+		t.Errorf("account directory was not created: %v", err)
+	}
+}
+
+func TestGenMbsyncrcForcesLoginOnlyWhenUnencrypted(t *testing.T) {
+	// mbsync will not send LOGIN over a plain connection unless forced, so
+	// tls:none needs it explicitly or it cannot authenticate at all.
+	plain := genMbsyncrc(&Config{Accounts: []Account{
+		{Name: "a", Host: "h", Port: 143, User: "u", Password: "p", TLS: "none", Patterns: []string{"*"}},
+	}}, "/mail")
+	if !strings.Contains(plain, "AuthMechs LOGIN") {
+		t.Error("tls:none must force LOGIN, or mbsync refuses to authenticate")
+	}
+
+	// With TLS, leave the mechanism to mbsync.
+	encrypted := genMbsyncrc(&Config{Accounts: []Account{
+		{Name: "a", Host: "h", Port: 993, User: "u", Password: "p", TLS: "imaps", Patterns: []string{"*"}},
+	}}, "/mail")
+	if strings.Contains(encrypted, "AuthMechs") {
+		t.Error("an encrypted connection should negotiate its own mechanism")
+	}
 }
