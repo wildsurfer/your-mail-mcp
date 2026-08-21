@@ -1,5 +1,8 @@
 # your-mail-mcp
 
+[![MCP registry](https://img.shields.io/badge/MCP_registry-io.github.wildsurfer%2Fyour--mail--mcp-blue)](https://registry.modelcontextprotocol.io/v0.1/servers?search=io.github.wildsurfer)
+[![Glama score](https://glama.ai/mcp/servers/wildsurfer/your-mail-mcp/badges/score.svg)](https://glama.ai/mcp/servers/wildsurfer/your-mail-mcp)
+
 Your mail already holds the answers: booking references, gate codes,
 invoices, warranty periods, promises people made in writing. This server lets
 your AI assistant find them.
