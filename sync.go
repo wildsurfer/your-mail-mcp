@@ -188,7 +188,14 @@ type Syncer struct {
 	// tests, since a real mount point is not reproducible in one.
 	mountPoint func(path string) bool
 
-	running sync.Mutex
+	// accountLocks serialises syncs of one account: two overlapping mbsync
+	// runs on the same store corrupt the near side. Different accounts are
+	// different stores and different connections, so they run in parallel —
+	// a provider that parks one account's connection no longer starves the
+	// others. reindexing stays serialised: notmuch new takes the database
+	// write lock.
+	accountLocks map[string]*sync.Mutex
+	reindexing   sync.Mutex
 
 	mu     sync.Mutex
 	status map[string]AccountStatus
@@ -202,6 +209,7 @@ func newSyncer(cfg *Config, maildir, index, mbsyncConfig string, nm *Notmuch) *S
 		mbsyncConfig: mbsyncConfig,
 		timeout:      time.Hour,
 		interval:     10 * time.Minute,
+		accountLocks: accountLocks(cfg),
 		mountPoint:   isMountPoint,
 		status:       map[string]AccountStatus{},
 		runCmd: func(ctx context.Context, name string, args ...string) error {
@@ -238,17 +246,16 @@ func newSyncer(cfg *Config, maildir, index, mbsyncConfig string, nm *Notmuch) *S
 // pass: with several accounts configured, one expired password must not stop
 // the rest.
 func (s *Syncer) Sync(ctx context.Context, account, folder string) (int, error) {
-	if !s.running.TryLock() {
-		return 0, errSyncBusy
-	}
-	defer s.running.Unlock()
-
 	if err := s.checkInitialised(); err != nil {
 		return 0, err
 	}
 
-	var attempted, failed int
-	var lastErr error
+	var (
+		wg                sync.WaitGroup
+		resMu             sync.Mutex
+		attempted, failed int
+		lastErr           error
+	)
 	for _, a := range s.cfg.Accounts {
 		if account != "" && a.Name != account {
 			continue
@@ -263,42 +270,50 @@ func (s *Syncer) Sync(ctx context.Context, account, folder string) (int, error) 
 				continue
 			}
 		}
-		// mbsync creates mailboxes inside a store, but not the store's own
-		// root, so a first run against a fresh volume fails with "cannot open
-		// store" until this directory exists.
-		if err := os.MkdirAll(filepath.Join(s.maildir, a.Name), 0o700); err != nil {
-			return 0, err
+		lock := s.accountLocks[a.Name]
+		if lock == nil {
+			return 0, fmt.Errorf("unknown account %q", account)
 		}
-		target := a.Name
-		if folder != "" {
-			target = a.Name + ":" + folder
+		if !lock.TryLock() {
+			// A named account is the caller's whole request; refusing tells
+			// them. On a scheduled pass a busy account just isn't due.
+			if account != "" {
+				return 0, errSyncBusy
+			}
+			continue
 		}
-		// Each account gets its own deadline, so a provider that stops
-		// responding mid-sync cannot hold the lock and stall every later
-		// refresh.
-		accountCtx, cancel := context.WithTimeout(ctx, s.timeout)
-		err := s.runCmd(accountCtx, "mbsync", "-c", s.mbsyncConfig, target)
-		cancel()
-		s.record(a.Name, err)
-		attempted++
-		if err != nil {
-			failed++
-			lastErr = err
-			// A failing account is skipped, not silent: anyone watching
-			// container logs should see it without knowing to call folders.
-			fmt.Fprintf(os.Stderr, "sync: account %s: %v\n", a.Name, err)
-		}
-		if ctx.Err() != nil {
-			return 0, ctx.Err()
-		}
+		wg.Add(1)
+		go func(a Account) {
+			defer wg.Done()
+			defer lock.Unlock()
+			err := s.syncAccount(ctx, a.Name, folder)
+			s.record(a.Name, err)
+			resMu.Lock()
+			defer resMu.Unlock()
+			attempted++
+			if err != nil {
+				failed++
+				lastErr = err
+				// A failing account is skipped, not silent: anyone watching
+				// container logs should see it without knowing to call folders.
+				fmt.Fprintf(os.Stderr, "sync: account %s: %v\n", a.Name, err)
+			}
+		}(a)
+	}
+	wg.Wait()
+	if ctx.Err() != nil {
+		return 0, ctx.Err()
 	}
 	// reindex always runs, even when every account just failed: notmuch new
 	// is what creates the database on a first run, and skipping it here
 	// would leave every other tool call failing with a raw, unwrapped
 	// "no such database" error instead of the graceful empty result an
-	// index that merely has nothing new in it returns.
+	// index that merely has nothing new in it returns. Serialised: notmuch
+	// new takes the database write lock.
 	s.markMirrored()
+	s.reindexing.Lock()
 	added, reindexErr := s.reindex(ctx)
+	s.reindexing.Unlock()
 	// A pass where every attempted account failed is not a success — without
 	// this, it looked exactly like a quiet inbox to refreshTool, which
 	// reports "0 new message(s)" for both. A multi-account pass with at
@@ -307,6 +322,24 @@ func (s *Syncer) Sync(ctx context.Context, account, folder string) (int, error) 
 		return 0, lastErr
 	}
 	return added, reindexErr
+}
+
+// syncAccount runs one mbsync for one account under its own deadline, so a
+// provider that stops responding mid-sync cannot stall anything but itself.
+func (s *Syncer) syncAccount(ctx context.Context, name, folder string) error {
+	// mbsync creates mailboxes inside a store, but not the store's own
+	// root, so a first run against a fresh volume fails with "cannot open
+	// store" until this directory exists.
+	if err := os.MkdirAll(filepath.Join(s.maildir, name), 0o700); err != nil {
+		return err
+	}
+	target := name
+	if folder != "" {
+		target = name + ":" + folder
+	}
+	accountCtx, cancel := context.WithTimeout(ctx, s.timeout)
+	defer cancel()
+	return s.runCmd(accountCtx, "mbsync", "-c", s.mbsyncConfig, target)
 }
 
 // markMirrored records, in the index directory, that a mirror exists at
@@ -395,14 +428,24 @@ func (s *Syncer) record(account string, err error) {
 	s.status[account] = st
 }
 
-// Busy reports whether a sync pass is running right now. It probes the
-// single-sync lock rather than keeping a second flag that could drift.
-func (s *Syncer) Busy() bool {
-	if s.running.TryLock() {
-		s.running.Unlock()
-		return false
+func accountLocks(cfg *Config) map[string]*sync.Mutex {
+	locks := make(map[string]*sync.Mutex, len(cfg.Accounts))
+	for _, a := range cfg.Accounts {
+		locks[a.Name] = &sync.Mutex{}
 	}
-	return true
+	return locks
+}
+
+// Busy reports whether any account is syncing right now. It probes the
+// per-account locks rather than keeping a flag that could drift.
+func (s *Syncer) Busy() bool {
+	for _, l := range s.accountLocks {
+		if !l.TryLock() {
+			return true
+		}
+		l.Unlock()
+	}
+	return false
 }
 
 // Status returns a copy of the per-account sync state, safe to read while a

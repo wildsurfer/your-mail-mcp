@@ -150,15 +150,20 @@ func (s *Server) sync(ctx context.Context, account, folder string) (added int, e
 - **Failure isolation.** A failing account is logged and skipped; the pass
   continues. With six accounts, one expired password must not stop the other five.
   The error is retained and surfaced through `folders`.
-- **Mutex.** Two overlapping mbsync runs produce the `near side box cannot be
-  opened anymore` failure recorded in the reference implementation's README. One
-  at a time, accounts synced sequentially. `refresh` returns "sync already
-  running" rather than queueing. An account that fails twice in a row is
+- **Mutex.** Two overlapping mbsync runs on the same store produce the `near
+  side box cannot be opened anymore` failure recorded in the reference
+  implementation's README, so each account has its own lock and never syncs
+  concurrently with itself. Different accounts are different stores and
+  different connections, and sync in parallel: this replaced the original
+  sequential pass after a provider-throttled Gmail connection held the global
+  lock for its whole deadline and starved the other account. `refresh` of an
+  account mid-sync returns "sync already running" rather than queueing, and
+  the reindex stays serialised behind its own lock, because `notmuch new`
+  takes the database write lock. An account that fails twice in a row is
   backed off exponentially from the sync interval, capped at an hour, so a
   provider outage or a Gmail quota lockout is retried tens of times a day
   rather than hundreds; a manual `refresh` of that account bypasses the
-  backoff, because a person asking is not a ticker looping. Sequential syncing is a deliberate ceiling: per
-  account locks and parallel passes are the upgrade if a full pass gets slow.
+  backoff, because a person asking is not a ticker looping.
 - **Empty-volume guard.** The question worth asking is the one the reference
   implementation asked of `/Volumes/2TB`: is the storage actually there? An empty
   directory answers it only together with two other signals.

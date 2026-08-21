@@ -129,8 +129,11 @@ func testSyncer(t *testing.T) (*Syncer, *[]string) {
 	cfg := &Config{Accounts: []Account{{Name: "work"}, {Name: "home"}}}
 	s := newSyncer(cfg, maildir, index, "/tmp/mbsyncrc", nil)
 	var calls []string
+	var callsMu sync.Mutex
 	s.runCmd = func(_ context.Context, _ string, args ...string) error {
+		callsMu.Lock()
 		calls = append(calls, args[len(args)-1])
+		callsMu.Unlock()
 		if strings.HasPrefix(args[len(args)-1], "work") {
 			return errors.New("AUTHENTICATIONFAILED")
 		}
@@ -225,13 +228,16 @@ func TestSyncOneAccountAndFolder(t *testing.T) {
 	}
 }
 
-func TestSyncIsSerialised(t *testing.T) {
+func TestSyncIsSerialisedPerAccount(t *testing.T) {
 	s, _ := testSyncer(t)
 	release := make(chan struct{})
 	entered := make(chan struct{})
-	s.runCmd = func(context.Context, string, ...string) error {
-		close(entered)
-		<-release
+	var once sync.Once
+	s.runCmd = func(_ context.Context, _ string, args ...string) error {
+		if strings.HasPrefix(args[len(args)-1], "home") {
+			once.Do(func() { close(entered) })
+			<-release
+		}
 		return nil
 	}
 	var wg sync.WaitGroup
@@ -242,8 +248,16 @@ func TestSyncIsSerialised(t *testing.T) {
 	}()
 	<-entered
 
-	if _, err := s.Sync(context.Background(), "work", ""); !errors.Is(err, errSyncBusy) {
-		t.Fatalf("second concurrent sync returned %v, want errSyncBusy", err)
+	// The same account is refused while its sync runs...
+	if _, err := s.Sync(context.Background(), "home", ""); !errors.Is(err, errSyncBusy) {
+		t.Fatalf("concurrent sync of the same account returned %v, want errSyncBusy", err)
+	}
+	// ...but a different account proceeds in parallel.
+	if _, err := s.Sync(context.Background(), "work", ""); errors.Is(err, errSyncBusy) {
+		t.Fatal("a different account was refused while home synced")
+	}
+	if !s.Busy() {
+		t.Error("Busy() = false while an account is mid-sync")
 	}
 	close(release)
 	wg.Wait()
