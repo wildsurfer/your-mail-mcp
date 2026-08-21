@@ -7,7 +7,8 @@ services:
     environment:
       PUBLIC_URL: ${PUBLIC_URL}
       OAUTH_PASSPHRASE: ${OAUTH_PASSPHRASE}
-      SYNC_INTERVAL: 5m
+      SYNC_INTERVAL: ${SYNC_INTERVAL:-10m}
+      SYNC_TIMEOUT: ${SYNC_TIMEOUT:-1h}
       WORK_PASS: ${WORK_PASS:-}
       PERSONAL_PASS: ${PERSONAL_PASS:-}
     volumes:
