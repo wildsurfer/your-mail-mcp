@@ -7,6 +7,7 @@ COPY *.go ./
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/your-mail-mcp .
 
 FROM debian:trixie-slim
+LABEL io.modelcontextprotocol.server.name="io.github.wildsurfer/your-mail-mcp"
 RUN apt-get update \
  && apt-get install -y --no-install-recommends isync notmuch w3m ca-certificates \
  && rm -rf /var/lib/apt/lists/*
