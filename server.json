@@ -1,0 +1,36 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.wildsurfer/your-mail-mcp",
+  "description": "Read-only, self-hosted MCP access to IMAP email, mirrored locally and indexed by notmuch.",
+  "repository": {
+    "url": "https://github.com/wildsurfer/your-mail-mcp",
+    "source": "github"
+  },
+  "version": "0.1.0",
+  "packages": [
+    {
+      "registryType": "oci",
+      "identifier": "ghcr.io/wildsurfer/your-mail-mcp:0.1.0",
+      "transport": {
+        "type": "streamable-http",
+        "url": "http://localhost:8080/mcp"
+      },
+      "environmentVariables": [
+        {
+          "name": "PUBLIC_URL",
+          "description": "Public base URL the server is reached at (used for OAuth metadata)",
+          "isRequired": true,
+          "format": "string",
+          "isSecret": false
+        },
+        {
+          "name": "OAUTH_PASSPHRASE",
+          "description": "Passphrase gating the OAuth consent step",
+          "isRequired": true,
+          "format": "string",
+          "isSecret": true
+        }
+      ]
+    }
+  ]
+}
