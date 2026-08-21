@@ -11,7 +11,7 @@ against real tools is in `docs/reviews/`.
 
 ## Status
 
-v1 is implemented: ten read tools, multi-account sync, SPECIAL-USE junk
+v1 is implemented: eleven read tools, multi-account sync, SPECIAL-USE junk
 discovery, OAuth with dynamic client registration, and a container image.
 
 Not verified against a real mail account yet. See "Before trusting it" below.
@@ -72,7 +72,7 @@ without changing the spec first.
 | Path | What |
 |---|---|
 | `main.go` | environment, accounts file, wiring, tickers, HTTP handler, bearer check |
-| `mcp.go` | the ten tools, `render()` chokepoint, query building, exclusions |
+| `mcp.go` | the eleven tools, `render()` chokepoint, query building, exclusions |
 | `notmuch.go` | executing notmuch, query validation, account scoping |
 | `sync.go` | generated configs, mbsync, sync mutex, guards, SPECIAL-USE discovery |
 | `oauth.go` | authorization-server endpoints and the client/token store |

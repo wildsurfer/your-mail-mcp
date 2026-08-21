@@ -959,3 +959,31 @@ func TestServeAttachmentStreamsRawBytes(t *testing.T) {
 		t.Errorf("injection id status = %d", rec.Code)
 	}
 }
+
+func TestStatusToolReportsFirstSyncAndBackoff(t *testing.T) {
+	s := attachmentFixture(t) // one indexed message under work/INBOX
+	retry := time.Now().Add(30 * time.Minute)
+	s.status = func() map[string]AccountStatus {
+		return map[string]AccountStatus{"work": {
+			LastError: "quota exceeded", Failures: 3, NextRetry: retry,
+		}}
+	}
+	s.syncBusy = func() bool { return true }
+
+	res, _, err := s.statusTool(context.Background(), nil, struct{}{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := res.Content[0].(*mcp.TextContent).Text
+	for _, want := range []string{
+		"a sync pass is running right now",
+		"first full sync: not completed yet",
+		"messages indexed: 1",
+		"last error (3 consecutive): quota exceeded",
+		"backing off; next scheduled attempt: " + retry.UTC().Format(time.RFC3339),
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("status output missing %q\n%s", want, out)
+		}
+	}
+}

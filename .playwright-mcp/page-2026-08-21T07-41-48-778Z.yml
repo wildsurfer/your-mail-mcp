@@ -1,0 +1,68 @@
+- generic [active] [ref=f47e1]:
+  - link "Skip to main content" [ref=f47e2] [cursor=pointer]:
+    - /url: "#main-content"
+  - generic [ref=f47e6]:
+    - generic:
+      - banner [ref=f47e9]:
+        - navigation [ref=f47e10]:
+          - link "Home" [ref=f47e14] [cursor=pointer]:
+            - /url: https://www.reddit.com/
+          - generic [ref=f47e30]:
+            - generic [ref=f47e34]: r/mcp
+            - textbox "Search in ⁨r/mcp⁩" [ref=f47e43]
+          - generic [ref=f47e44]:
+            - generic [ref=f47e45]:
+              - link "Advertise on Reddit" [ref=f47e51] [cursor=pointer]:
+                - /url: https://ads.reddit.com/register?utm_source=web3x_consumer&utm_name=nav_cta
+              - button "Open chat" [ref=f47e64] [cursor=pointer]
+              - link "Create post" [ref=f47e74] [cursor=pointer]:
+                - /url: /r/mcp/submit/
+                - generic [ref=f47e75]: Create
+              - link "Open inbox" [ref=f47e86] [cursor=pointer]:
+                - /url: /notifications
+            - button "Expand user menu" [ref=f47e96] [cursor=pointer]
+      - generic [ref=f47e104]:
+        - generic [ref=f47e107]:
+          - main [ref=f47e108]:
+            - generic "Submit to r/mcp"
+          - generic [ref=f47e126]:
+            - heading "r/mcp Rules" [level=2] [ref=f47e128]
+            - generic [ref=f47e130]:
+              - group [ref=f47e132]:
+                - generic "1 No waitlists" [ref=f47e133] [cursor=pointer]:
+                  - generic [ref=f47e136]:
+                    - generic [ref=f47e137]: "1"
+                    - heading "No waitlists" [level=2] [ref=f47e142]
+              - group [ref=f47e148]:
+                - generic "2 No AI generated slop" [ref=f47e149] [cursor=pointer]:
+                  - generic [ref=f47e152]:
+                    - generic [ref=f47e153]: "2"
+                    - heading "No AI generated slop" [level=2] [ref=f47e158]
+              - group [ref=f47e164]:
+                - generic "3 No astroturfing" [ref=f47e165] [cursor=pointer]:
+                  - generic [ref=f47e168]:
+                    - generic [ref=f47e169]: "3"
+                    - heading "No astroturfing" [level=2] [ref=f47e174]
+              - group [ref=f47e180]:
+                - generic "4 Use showcase tag to share your work" [ref=f47e181] [cursor=pointer]:
+                  - generic [ref=f47e184]:
+                    - generic [ref=f47e185]: "4"
+                    - heading "Use showcase tag to share your work" [level=2] [ref=f47e190]
+          - list [ref=f47e196]:
+            - listitem [ref=f47e197]:
+              - link "Reddit Rules" [ref=f47e199] [cursor=pointer]:
+                - /url: https://www.redditinc.com/policies/content-policy
+            - listitem [ref=f47e200]:
+              - link "Privacy Policy" [ref=f47e202] [cursor=pointer]:
+                - /url: https://www.reddit.com/policies/privacy-policy
+            - listitem [ref=f47e203]:
+              - link "User Agreement" [ref=f47e205] [cursor=pointer]:
+                - /url: https://www.redditinc.com/policies/user-agreement
+            - listitem [ref=f47e206]:
+              - link "Accessibility" [ref=f47e208] [cursor=pointer]:
+                - /url: https://support.reddithelp.com/hc/sections/38303584022676-Accessibility
+              - generic [ref=f47e209]: •
+            - listitem [ref=f47e210]:
+              - link "Reddit, Inc. © 2026. All rights reserved." [ref=f47e211] [cursor=pointer]:
+                - /url: https://redditinc.com
+        - button "Expand Navigation" [ref=f47e216] [cursor=pointer]

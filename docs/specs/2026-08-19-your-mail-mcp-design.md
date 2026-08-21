@@ -153,7 +153,11 @@ func (s *Server) sync(ctx context.Context, account, folder string) (added int, e
 - **Mutex.** Two overlapping mbsync runs produce the `near side box cannot be
   opened anymore` failure recorded in the reference implementation's README. One
   at a time, accounts synced sequentially. `refresh` returns "sync already
-  running" rather than queueing. Sequential syncing is a deliberate ceiling: per
+  running" rather than queueing. An account that fails twice in a row is
+  backed off exponentially from the sync interval, capped at an hour, so a
+  provider outage or a Gmail quota lockout is retried tens of times a day
+  rather than hundreds; a manual `refresh` of that account bypasses the
+  backoff, because a person asking is not a ticker looping. Sequential syncing is a deliberate ceiling: per
   account locks and parallel passes are the upgrade if a full pass gets slow.
 - **Empty-volume guard.** The question worth asking is the one the reference
   implementation asked of `/Volumes/2TB`: is the storage actually there? An empty
@@ -249,6 +253,7 @@ Nine tools: the eight from the reference `mailq`, mapped one to one, plus
 | `count` | query, account? | integer |
 | `folders` | — | accounts, their folders, tags, last sync, last error |
 | `refresh` | account? | number of new messages |
+| `status` | — | sync health per account: first-sync completion, last sync, messages indexed, errors, backoff |
 
 Four rules apply to all of them, each implemented in exactly one place so no
 individual tool can forget it:

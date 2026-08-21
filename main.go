@@ -305,6 +305,8 @@ func run() error {
 	srv.publicURL = strings.TrimSuffix(e.PublicURL, "/")
 	srv.sync = syncer.Sync
 	srv.status = syncer.Status
+	srv.syncBusy = syncer.Busy
+	syncer.interval = e.SyncInterval
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()

@@ -1,0 +1,1 @@
+[    1123ms] [WARNING] A preload for 'https://selfh.st/assets/built/app.js?v=D-ui77oNXw3JBQD8' is found, but is not used because the request credentials mode does not match. Consider taking a look at crossorigin attribute. @ https://selfh.st/cdn-cgi/scripts/7d0fa10a/cloudflare-static/rocket-loader.min.js:0

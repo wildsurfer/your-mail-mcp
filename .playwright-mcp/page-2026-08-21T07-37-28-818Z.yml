@@ -1,0 +1,584 @@
+- generic [active] [ref=f38e1]:
+  - banner [ref=f38e2]:
+    - generic [ref=f38e4]:
+      - paragraph [ref=f38e5]:
+        - link "Changelog" [ref=f38e6] [cursor=pointer]:
+          - /url: /
+      - navigation [ref=f38e7]:
+        - generic [ref=f38e8]:
+          - list [ref=f38e9]:
+            - listitem [ref=f38e10]:
+              - link "Podcasts" [ref=f38e11] [cursor=pointer]:
+                - /url: /
+            - listitem [ref=f38e12]:
+              - link "News" [ref=f38e13] [cursor=pointer]:
+                - /url: /news
+            - listitem [ref=f38e14]:
+              - link "Beats" [ref=f38e15] [cursor=pointer]:
+                - /url: /beats
+            - listitem [ref=f38e16]:
+              - link "Community" [ref=f38e17] [cursor=pointer]:
+                - /url: /community
+            - listitem [ref=f38e18]:
+              - link "Merch" [ref=f38e19] [cursor=pointer]:
+                - /url: https://merch.changelog.com
+            - listitem [ref=f38e20]:
+              - link "Changelog++" [ref=f38e21] [cursor=pointer]:
+                - /url: /++
+          - generic [ref=f38e22]:
+            - list [ref=f38e23]:
+              - listitem [ref=f38e24]:
+                - link "Submit News" [ref=f38e25] [cursor=pointer]:
+                  - /url: /news/submit
+            - button [ref=f38e26] [cursor=pointer]:
+              - img "Ivan Kuznetsov Avatar" [ref=f38e27]
+            - textbox "Search" [ref=f38e29]:
+              - /placeholder: Search Changelog
+    - generic [ref=f38e31]:
+      - alert [ref=f38e32]:
+        - paragraph [ref=f38e33]: We received your submission! Stay awesome 💚
+      - button "Close" [ref=f38e34] [cursor=pointer]
+  - text: ~ $
+  - main [ref=f38e37]:
+    - generic [ref=f38e38]:
+      - generic [ref=f38e39]:
+        - heading "Software's best weekly news brief, deep technical interviews, and weekend talk show." [level=2] [ref=f38e40]
+        - paragraph [ref=f38e41]:
+          - text: ✨
+          - link "The Changelog" [ref=f38e42] [cursor=pointer]:
+            - /url: /podcast
+          - text: ✨ podcast combines our three awesome shows into one easy subscription.
+      - generic [ref=f38e43]:
+        - article [ref=f38e44]:
+          - generic [ref=f38e45]:
+            - link [ref=f38e46] [cursor=pointer]:
+              - /url: /news
+              - img "Changelog News Artwork" [ref=f38e47]
+            - generic [ref=f38e48]:
+              - heading [level=2] [ref=f38e50]:
+                - link "Mondays" [ref=f38e51] [cursor=pointer]:
+                  - /url: /news
+              - text: Developer news worth your attention. Brief, entertaining & always on point.
+        - article [ref=f38e52]:
+          - generic [ref=f38e53]:
+            - link [ref=f38e54] [cursor=pointer]:
+              - /url: /interviews
+              - img "Changelog Interviews Artwork" [ref=f38e55]
+            - generic [ref=f38e56]:
+              - heading [level=2] [ref=f38e58]:
+                - link "Wednesdays" [ref=f38e59] [cursor=pointer]:
+                  - /url: /interviews
+              - text: Conversations with the hackers, leaders, and innovators of the software world.
+        - article [ref=f38e60]:
+          - generic [ref=f38e61]:
+            - link [ref=f38e62] [cursor=pointer]:
+              - /url: /friends
+              - img "Changelog & Friends Artwork" [ref=f38e63]
+            - generic [ref=f38e64]:
+              - heading [level=2] [ref=f38e66]:
+                - link "Fridays" [ref=f38e67] [cursor=pointer]:
+                  - /url: /friends
+              - text: A weekend talk show with the best conference hallway track vibes
+        - article [ref=f38e68]:
+          - generic [ref=f38e69]:
+            - link [ref=f38e70] [cursor=pointer]:
+              - /url: /plusplus
+              - img "Changelog++ Artwork" [ref=f38e71]
+            - generic [ref=f38e72]:
+              - generic:
+                - heading [level=2]:
+                  - link:
+                    - /url: /plusplus
+              - text: Ditch the ads, get bonuses & directly support our work. It's better!
+    - generic [ref=f38e74]:
+      - navigation [ref=f38e75]:
+        - list [ref=f38e76]:
+          - listitem [ref=f38e77]:
+            - link "Recent Episodes" [ref=f38e78] [cursor=pointer]:
+              - /url: "#recent"
+          - listitem [ref=f38e79]:
+            - link "🙏 Request!" [ref=f38e80] [cursor=pointer]:
+              - /url: /request
+      - article [ref=f38e81]:
+        - generic [ref=f38e82]:
+          - paragraph [ref=f38e83]:
+            - link [ref=f38e84] [cursor=pointer]:
+              - /url: /interviews
+              - img "Changelog Interviews" [ref=f38e85]
+            - 'link "Changelog Interviews #683" [ref=f38e86] [cursor=pointer]':
+              - /url: /podcast/683
+          - heading [level=2] [ref=f38e87]:
+            - link "Canary tokens and digital tripwires" [ref=f38e88] [cursor=pointer]:
+              - /url: /podcast/683
+        - generic [ref=f38e89]:
+          - button "Play" [ref=f38e90] [cursor=pointer]
+          - generic [ref=f38e91]:
+            - generic [ref=f38e92]:
+              - link [ref=f38e93] [cursor=pointer]:
+                - /url: /person/haroonmeer
+                - img "Featuring Haroon Meer" [ref=f38e94]
+              - link [ref=f38e95] [cursor=pointer]:
+                - /url: /person/adamstac
+                - img "Featuring Adam Stacoviak" [ref=f38e96]
+            - generic [ref=f38e97]: 2026-07-21
+        - paragraph [ref=f38e99]: Haroon Meer is back! Haroon is the Founder of Thinkst, the ~50-person bootstrapped company behind Canary and Canarytokens — honeypots and tripwires you sprinkle inside your network and forget about until an attacker touches one. We talk about the AWS API key token attackers just can’t resist trying, the real credit card token backed by an actual bank partnership, Breadcrumbs (their brand-new feature that leads intruders straight to your canaries), a live demo where a hardware Canary becomes a Synology NAS in one click, and how a company with zero outbound sales and no price increase in ten years quietly passed $22.5 million in ARR.
+        - generic [ref=f38e101]:
+          - link "Discuss" [ref=f38e102] [cursor=pointer]:
+            - /url: https://changelog.zulipchat.com/#narrow/stream/456187-interviews
+          - text: •
+          - link "Share" [ref=f38e103] [cursor=pointer]:
+            - /url: javascript:void(0);
+      - article [ref=f38e104]:
+        - generic [ref=f38e105]:
+          - paragraph [ref=f38e106]:
+            - link [ref=f38e107] [cursor=pointer]:
+              - /url: /interviews
+              - img "Changelog Interviews" [ref=f38e108]
+            - 'link "Changelog Interviews #682" [ref=f38e109] [cursor=pointer]':
+              - /url: /podcast/682
+          - heading [level=2] [ref=f38e110]:
+            - link "From open source hits to OpenAI" [ref=f38e111] [cursor=pointer]:
+              - /url: /podcast/682
+        - generic [ref=f38e112]:
+          - button "Play" [ref=f38e113] [cursor=pointer]
+          - generic [ref=f38e114]:
+            - generic [ref=f38e115]:
+              - link [ref=f38e116] [cursor=pointer]:
+                - /url: /person/mxstbr
+                - img "Featuring Max Stoiber" [ref=f38e117]
+              - link [ref=f38e118] [cursor=pointer]:
+                - /url: /person/adamstac
+                - img "Featuring Adam Stacoviak" [ref=f38e119]
+            - generic [ref=f38e120]: 2026-06-05
+        - paragraph [ref=f38e122]: This week I’m talking with Max Stoiber, currently working on ChatGPT’s plugin directory and app platform at OpenAI. We discuss the hundreds of open source projects nobody remembers alongside the big ones like react-boilerplate and styled-components, how Spectrum became part of GitHub and eventually helped shape GitHub Discussions, the founder growth that came from building Stellate, the GraphQL cache that turned into a dual acquisition by Shopify and The Guild, and why ChatGPT apps feel like a new surface for software.
+        - generic [ref=f38e124]:
+          - link "Discuss" [ref=f38e125] [cursor=pointer]:
+            - /url: https://changelog.zulipchat.com/#narrow/stream/456187-interviews
+          - text: •
+          - link "Share" [ref=f38e126] [cursor=pointer]:
+            - /url: javascript:void(0);
+      - article [ref=f38e127]:
+        - generic [ref=f38e128]:
+          - paragraph [ref=f38e129]:
+            - link [ref=f38e130] [cursor=pointer]:
+              - /url: /interviews
+              - img "Changelog Interviews" [ref=f38e131]
+            - 'link "Changelog Interviews #681" [ref=f38e132] [cursor=pointer]':
+              - /url: /podcast/681
+          - heading [level=2] [ref=f38e133]:
+            - link "MCP on Code Mode" [ref=f38e134] [cursor=pointer]:
+              - /url: /podcast/681
+        - generic [ref=f38e135]:
+          - button "Play" [ref=f38e136] [cursor=pointer]
+          - generic [ref=f38e137]:
+            - generic [ref=f38e138]:
+              - link [ref=f38e139] [cursor=pointer]:
+                - /url: /person/mattzcarey
+                - img "Featuring Matt Carey" [ref=f38e140]
+              - link [ref=f38e141] [cursor=pointer]:
+                - /url: /person/adamstac
+                - img "Featuring Adam Stacoviak" [ref=f38e142]
+            - generic [ref=f38e143]: 2026-05-15
+        - paragraph [ref=f38e145]: This week I’m talking with Matt Carey about Code Mode and how most of us have been thinking about MCP all wrong. Matt works on the Agents SDK and MCP at Cloudflare — we discuss how server-side Code Mode lets one MCP server expose all ~2,500 Cloudflare API endpoints in about 1,000 tokens of context, the dynamic Worker loader that runs model-written code safely in a V8 isolate, Matt’s own workflow with Claude, where memory fits into the future of agents, and his Zaggy git wrapper that keeps agents from force-pushing his repos.
+        - generic [ref=f38e147]:
+          - link "Discuss" [ref=f38e148] [cursor=pointer]:
+            - /url: https://changelog.zulipchat.com/#narrow/stream/456187-interviews
+          - text: •
+          - link "Share" [ref=f38e149] [cursor=pointer]:
+            - /url: javascript:void(0);
+      - article [ref=f38e150]:
+        - generic [ref=f38e151]:
+          - paragraph [ref=f38e152]:
+            - link [ref=f38e153] [cursor=pointer]:
+              - /url: /friends
+              - img "Changelog & Friends" [ref=f38e154]
+            - 'link "Changelog & Friends #130" [ref=f38e155] [cursor=pointer]':
+              - /url: /friends/130
+          - heading [level=2] [ref=f38e156]:
+            - link "Automation at the speed of Swamp" [ref=f38e157] [cursor=pointer]:
+              - /url: /friends/130
+        - generic [ref=f38e158]:
+          - button "Play" [ref=f38e159] [cursor=pointer]
+          - generic [ref=f38e160]:
+            - generic [ref=f38e161]:
+              - link [ref=f38e162] [cursor=pointer]:
+                - /url: /person/adamhjk
+                - img "Featuring Adam Jacob" [ref=f38e163]
+              - link [ref=f38e164] [cursor=pointer]:
+                - /url: /person/adamstac
+                - img "Featuring Adam Stacoviak" [ref=f38e165]
+            - generic [ref=f38e166]: 2026-05-13
+        - paragraph [ref=f38e168]: This week I’m talking with Adam Jacob, founder of System Initiative and creator of Swamp, about what happens when AI agents change the entire shape of software development. We discuss how he went from an 18-person team down to five and shipped Swamp 900 times in four weeks, why he brought User Acceptance Testing (UAT) testing back from the 90s, why software architecture (and domain-driven design) suddenly matters more than knowing how to write code, the live demo where I pointed Swamp at my Proxmox box and watched it write its own automation (blew my mind!!), and why he’ll never accept a pull request to Swamp, ever.
+        - generic [ref=f38e170]:
+          - link "Discuss" [ref=f38e171] [cursor=pointer]:
+            - /url: https://changelog.zulipchat.com/#narrow/stream/455613-friends
+          - text: •
+          - link "Share" [ref=f38e172] [cursor=pointer]:
+            - /url: javascript:void(0);
+      - article [ref=f38e173]:
+        - generic [ref=f38e174]:
+          - paragraph [ref=f38e175]:
+            - link [ref=f38e176] [cursor=pointer]:
+              - /url: /news
+              - img "Changelog News" [ref=f38e177]
+            - 'link "Changelog News #185" [ref=f38e178] [cursor=pointer]':
+              - /url: /news/185
+          - heading [level=2] [ref=f38e179]:
+            - link "Bitwarden CLI compromised" [ref=f38e180] [cursor=pointer]:
+              - /url: /news/185
+        - generic [ref=f38e181]:
+          - button "Play" [ref=f38e182] [cursor=pointer]
+          - generic [ref=f38e183]:
+            - link [ref=f38e185] [cursor=pointer]:
+              - /url: /person/adamstac
+              - img "Featuring Adam Stacoviak" [ref=f38e186]
+            - generic [ref=f38e187]: 2026-04-29
+        - paragraph [ref=f38e189]: Bitwarden’s CLI got hit by the Checkmarx supply-chain campaign, TypeScript 7.0 beta lands with the Go-rewritten compiler running ~10x faster than 6.0, and pgBackRest lost its maintainer of thirteen years leaving anyone running production Postgres with a real dependency-trust task this week. We’ve also got Ubuntu 26.04 LTS shipping with TPM-backed full-disk encryption, and Matz dropping Spinel as an AOT path that takes Ruby to native binaries. This week was a good reminder that the tools we depend on are all moving at once. Security, performance, and maintenance aren’t isolated threads.
+        - generic [ref=f38e191]:
+          - link "Discuss" [ref=f38e192] [cursor=pointer]:
+            - /url: https://changelog.zulipchat.com/#narrow/stream/455469-news
+          - text: •
+          - link "Share" [ref=f38e193] [cursor=pointer]:
+            - /url: javascript:void(0);
+      - article [ref=f38e194]:
+        - generic [ref=f38e195]:
+          - paragraph [ref=f38e196]:
+            - link [ref=f38e197] [cursor=pointer]:
+              - /url: /interviews
+              - img "Changelog Interviews" [ref=f38e198]
+            - 'link "Changelog Interviews #680" [ref=f38e199] [cursor=pointer]':
+              - /url: /podcast/680
+          - heading [level=2] [ref=f38e200]:
+            - link "Exploring with agents" [ref=f38e201] [cursor=pointer]:
+              - /url: /podcast/680
+        - generic [ref=f38e202]:
+          - button "Play" [ref=f38e203] [cursor=pointer]
+          - generic [ref=f38e204]:
+            - generic [ref=f38e205]:
+              - link [ref=f38e206] [cursor=pointer]:
+                - /url: /person/wattenberger
+                - img "Featuring Amelia Wattenberger" [ref=f38e207]
+              - link [ref=f38e208] [cursor=pointer]:
+                - /url: /person/adamstac
+                - img "Featuring Adam Stacoviak" [ref=f38e209]
+            - generic [ref=f38e210]: 2026-04-24
+        - paragraph [ref=f38e212]: Today on the show I’m talking with Amelia Wattenberger — designer, data-viz veteran, ex-GitHub Next, and now designing Intent at Augment Code. What if the last 30% of any software project is about to become the hardest part you’ve ever done? That’s the argument Amelia is making today. We discuss the identity crisis developers are having as agents take over the keyboard, the epic redesign of developer tooling in this agent-first world, the arc from autocomplete to chat to CLI back to UI, why Intent treats a workspace as their core primitive not a chat thread, the tradeoffs between one-worktree-per-agent vs. one-worktree-per-task, and why she thinks prototyping just got easier but finishing got harder.
+        - generic [ref=f38e214]:
+          - link "Discuss" [ref=f38e215] [cursor=pointer]:
+            - /url: https://changelog.zulipchat.com/#narrow/stream/456187-interviews
+          - text: •
+          - link "Share" [ref=f38e216] [cursor=pointer]:
+            - /url: javascript:void(0);
+      - article [ref=f38e217]:
+        - generic [ref=f38e218]:
+          - paragraph [ref=f38e219]:
+            - link [ref=f38e220] [cursor=pointer]:
+              - /url: /news
+              - img "Changelog News" [ref=f38e221]
+            - 'link "Changelog News #184" [ref=f38e222] [cursor=pointer]':
+              - /url: /news/184
+          - heading [level=2] [ref=f38e223]:
+            - link "Astral has been acquired by OpenAI" [ref=f38e224] [cursor=pointer]:
+              - /url: /news/184
+        - generic [ref=f38e225]:
+          - button "Play" [ref=f38e226] [cursor=pointer]
+          - generic [ref=f38e227]:
+            - link [ref=f38e229] [cursor=pointer]:
+              - /url: /person/adamstac
+              - img "Featuring Adam Stacoviak" [ref=f38e230]
+            - generic [ref=f38e231]: 2026-03-27
+        - paragraph [ref=f38e233]: Astral is joining OpenAI, which says a lot about where the center of gravity is moving for developer tools, LiteLLM got hit by a nasty supply-chain attack, and OpenCode blew up as the latest serious open source swing at the coding-agent stack. We’ve also got Rust doing a very public reality check on its own pain points, WorkOS pushing AuthKit into CLI auth, Ryan Lizza using AI to build an open source TurboTax alternative, and a fresh httpx fork that turns open source maintenance drama into a real dependency story. If nothing else, this week was a good reminder that tools, trust, and control all move together.
+        - generic [ref=f38e235]:
+          - link "Discuss" [ref=f38e236] [cursor=pointer]:
+            - /url: https://changelog.zulipchat.com/#narrow/stream/455469-news
+          - text: •
+          - link "Share" [ref=f38e237] [cursor=pointer]:
+            - /url: javascript:void(0);
+      - article [ref=f38e238]:
+        - generic [ref=f38e239]:
+          - paragraph [ref=f38e240]:
+            - link [ref=f38e241] [cursor=pointer]:
+              - /url: /interviews
+              - img "Changelog Interviews" [ref=f38e242]
+            - 'link "Changelog Interviews #679" [ref=f38e243] [cursor=pointer]':
+              - /url: /podcast/679
+          - heading [level=2] [ref=f38e244]:
+            - link "From Tailnet to platform" [ref=f38e245] [cursor=pointer]:
+              - /url: /podcast/679
+        - generic [ref=f38e246]:
+          - button "Play" [ref=f38e247] [cursor=pointer]
+          - generic [ref=f38e248]:
+            - generic [ref=f38e249]:
+              - link [ref=f38e250] [cursor=pointer]:
+                - /url: /person/dfcarney
+                - img "Featuring David Carney" [ref=f38e251]
+              - link [ref=f38e252] [cursor=pointer]:
+                - /url: /person/adamstac
+                - img "Featuring Adam Stacoviak" [ref=f38e253]
+            - generic [ref=f38e254]: 2026-03-11
+        - paragraph [ref=f38e256]: "Adam talks with Tailscale co-founder and Chief Strategy Officer David Carney about where Tailscale is headed next: TSIDP, TSNet, multiple tailnets, and Aperture. They get into clickless auth (via TSIDP), TSNet apps, multiple tailnets for isolation and control, and Aperture, Tailscale’s private AI gateway for API key management, observability, and agent security."
+        - generic [ref=f38e258]:
+          - link "Discuss" [ref=f38e259] [cursor=pointer]:
+            - /url: https://changelog.zulipchat.com/#narrow/stream/456187-interviews
+          - text: •
+          - link "Share" [ref=f38e260] [cursor=pointer]:
+            - /url: javascript:void(0);
+      - article [ref=f38e261]:
+        - generic [ref=f38e262]:
+          - paragraph [ref=f38e263]:
+            - link [ref=f38e264] [cursor=pointer]:
+              - /url: /news
+              - img "Changelog News" [ref=f38e265]
+            - 'link "Changelog News #183" [ref=f38e266] [cursor=pointer]':
+              - /url: /news/183
+          - heading [level=2] [ref=f38e267]:
+            - link "Big change brings big change" [ref=f38e268] [cursor=pointer]:
+              - /url: /news/183
+        - generic [ref=f38e269]:
+          - button "Play" [ref=f38e270] [cursor=pointer]
+          - generic [ref=f38e271]:
+            - link [ref=f38e273] [cursor=pointer]:
+              - /url: /person/adamstac
+              - img "Featuring Adam Stacoviak" [ref=f38e274]
+            - generic [ref=f38e275]: 2026-03-10
+        - paragraph [ref=f38e277]: This week’s been wild — Iran bombed AWS data centers to take down Claude, OpenAI dropped GPT-5.4 (and it’s seriously good for coding), and living brain cells are literally playing DOOM. We’ve also got a heartfelt take on what it feels like to be a 10x engineer in the age of AI, plus some cool new tools like Handy for speech-to-text and web haptics. Oh, and new MacBook Pros with M5 Pro and M5 Max are up for pre-order. Try not to impulse buy (or do).
+        - generic [ref=f38e279]:
+          - link "Discuss" [ref=f38e280] [cursor=pointer]:
+            - /url: https://changelog.zulipchat.com/#narrow/stream/455469-news
+          - text: •
+          - link "Share" [ref=f38e281] [cursor=pointer]:
+            - /url: javascript:void(0);
+      - article [ref=f38e282]:
+        - generic [ref=f38e283]:
+          - paragraph [ref=f38e284]:
+            - link [ref=f38e285] [cursor=pointer]:
+              - /url: /friends
+              - img "Changelog & Friends" [ref=f38e286]
+            - 'link "Changelog & Friends #129" [ref=f38e287] [cursor=pointer]':
+              - /url: /friends/129
+          - heading [level=2] [ref=f38e288]:
+            - link "Finale & Friends" [ref=f38e289] [cursor=pointer]:
+              - /url: /friends/129
+        - generic [ref=f38e290]:
+          - button "Play" [ref=f38e291] [cursor=pointer]
+          - button "Watch" [ref=f38e292] [cursor=pointer]
+          - generic [ref=f38e293]:
+            - generic [ref=f38e294]:
+              - link [ref=f38e295] [cursor=pointer]:
+                - /url: /person/adamstac
+                - img "Featuring Adam Stacoviak" [ref=f38e296]
+              - link [ref=f38e297] [cursor=pointer]:
+                - /url: /person/jerodsanto
+                - img "Featuring Jerod Santo" [ref=f38e298]
+            - generic [ref=f38e299]: 2026-03-02 •
+            - link "#updates" [ref=f38e301] [cursor=pointer]:
+              - /url: /topic/updates
+        - paragraph [ref=f38e303]:
+          - text: Adam and Jerod get into the news, Jerod officially retires from the pod (and Changelog), plus a bonus for our
+          - link "Changelog++ subs" [ref=f38e304] [cursor=pointer]:
+            - /url: https://changelog.com/++
+          - text: "!"
+        - generic [ref=f38e306]:
+          - link "Discuss" [ref=f38e307] [cursor=pointer]:
+            - /url: https://changelog.zulipchat.com/#narrow/stream/455613-friends
+          - text: •
+          - link "Share" [ref=f38e308] [cursor=pointer]:
+            - /url: javascript:void(0);
+      - navigation "Pagination" [ref=f38e309]:
+        - link "View All" [ref=f38e310] [cursor=pointer]:
+          - /url: /master
+  - contentinfo [ref=f38e311]:
+    - navigation [ref=f38e312]:
+      - generic [ref=f38e313]:
+        - list [ref=f38e314]:
+          - listitem [ref=f38e315]:
+            - link "About" [ref=f38e316] [cursor=pointer]:
+              - /url: /about
+          - listitem [ref=f38e317]:
+            - link "Contact" [ref=f38e318] [cursor=pointer]:
+              - /url: /contact
+          - listitem [ref=f38e319]:
+            - link "888-974-CHLG (2454)" [ref=f38e320] [cursor=pointer]:
+              - /url: tel:+1-888-974-2454
+        - list [ref=f38e321]:
+          - listitem [ref=f38e322]:
+            - link [ref=f38e323] [cursor=pointer]:
+              - /url: https://www.youtube.com/changelog
+              - img "YouTube Icon" [ref=f38e324]
+          - listitem [ref=f38e325]:
+            - link [ref=f38e326] [cursor=pointer]:
+              - /url: https://bsky.app/profile/changelog.com
+              - img "Bluesky Icon" [ref=f38e327]
+          - listitem [ref=f38e328]:
+            - link [ref=f38e329] [cursor=pointer]:
+              - /url: https://x.com/changelog
+              - img "X Icon" [ref=f38e330]
+          - listitem [ref=f38e331]:
+            - link [ref=f38e332] [cursor=pointer]:
+              - /url: https://changelog.social
+              - img "Mastodon Icon" [ref=f38e333]
+          - listitem [ref=f38e334]:
+            - link [ref=f38e335] [cursor=pointer]:
+              - /url: https://linkedin.com/company/changelog
+              - img "LinkedIn Icon" [ref=f38e336]
+          - listitem [ref=f38e337]:
+            - link [ref=f38e338] [cursor=pointer]:
+              - /url: https://github.com/thechangelog
+              - img "GitHub Icon" [ref=f38e339]
+          - listitem [ref=f38e340]:
+            - link [ref=f38e341] [cursor=pointer]:
+              - /url: https://www.instagram.com/changelog_
+              - img "Instagram Icon" [ref=f38e342]
+          - listitem [ref=f38e343]:
+            - link [ref=f38e344] [cursor=pointer]:
+              - /url: https://www.tiktok.com/@changelog.com
+              - img "TikTok Icon" [ref=f38e345]
+    - navigation [ref=f38e346]:
+      - generic [ref=f38e347]:
+        - heading [level=4] [ref=f38e348]:
+          - link "Podcasts" [ref=f38e349] [cursor=pointer]:
+            - /url: /podcasts
+        - list [ref=f38e350]:
+          - listitem [ref=f38e351]:
+            - link "Changelog News" [ref=f38e352] [cursor=pointer]:
+              - /url: /news
+          - listitem [ref=f38e353]:
+            - link "Changelog Interviews" [ref=f38e354] [cursor=pointer]:
+              - /url: /podcast
+          - listitem [ref=f38e355]:
+            - link "Changelog & Friends" [ref=f38e356] [cursor=pointer]:
+              - /url: /friends
+          - listitem [ref=f38e357]:
+            - link "Changelog++" [ref=f38e358] [cursor=pointer]:
+              - /url: /plusplus
+          - listitem [ref=f38e359]: "---"
+          - listitem [ref=f38e360]:
+            - link "Practical AI" [ref=f38e361] [cursor=pointer]:
+              - /url: /practicalai
+          - listitem [ref=f38e362]:
+            - link "JS Party" [ref=f38e363] [cursor=pointer]:
+              - /url: /jsparty
+          - listitem [ref=f38e364]:
+            - link "Ship It!" [ref=f38e365] [cursor=pointer]:
+              - /url: /shipit
+          - listitem [ref=f38e366]:
+            - link "Founders Talk" [ref=f38e367] [cursor=pointer]:
+              - /url: /founderstalk
+          - listitem [ref=f38e368]:
+            - link "Go Time" [ref=f38e369] [cursor=pointer]:
+              - /url: /gotime
+          - listitem [ref=f38e370]:
+            - link "Request For Commits" [ref=f38e371] [cursor=pointer]:
+              - /url: /rfc
+          - listitem [ref=f38e372]:
+            - link "Brain Science" [ref=f38e373] [cursor=pointer]:
+              - /url: /brainscience
+          - listitem [ref=f38e374]:
+            - link "Backstage" [ref=f38e375] [cursor=pointer]:
+              - /url: /backstage
+          - listitem [ref=f38e376]:
+            - link "Spotlight" [ref=f38e377] [cursor=pointer]:
+              - /url: /spotlight
+          - listitem [ref=f38e378]:
+            - link "Away from Keyboard" [ref=f38e379] [cursor=pointer]:
+              - /url: /afk
+      - generic [ref=f38e380]:
+        - heading "Social" [level=4] [ref=f38e381]
+        - list [ref=f38e382]:
+          - listitem [ref=f38e383]:
+            - link "TwiX" [ref=f38e384] [cursor=pointer]:
+              - /url: https://twitter.com/changelog
+          - listitem [ref=f38e385]:
+            - link "GitHub" [ref=f38e386] [cursor=pointer]:
+              - /url: https://github.com/thechangelog
+          - listitem [ref=f38e387]:
+            - link "TikTok" [ref=f38e388] [cursor=pointer]:
+              - /url: https://www.tiktok.com/@changelog.com
+          - listitem [ref=f38e389]:
+            - link "YouTube" [ref=f38e390] [cursor=pointer]:
+              - /url: https://www.youtube.com/changelog
+          - listitem [ref=f38e391]:
+            - link "Bluesky" [ref=f38e392] [cursor=pointer]:
+              - /url: https://bsky.app/profile/changelog.com
+          - listitem [ref=f38e393]:
+            - link "LinkedIn" [ref=f38e394] [cursor=pointer]:
+              - /url: https://linkedin.com/company/changelog
+          - listitem [ref=f38e395]:
+            - link "Mastodon" [ref=f38e396] [cursor=pointer]:
+              - /url: https://changelog.social
+          - listitem [ref=f38e397]:
+            - link "Instagram" [ref=f38e398] [cursor=pointer]:
+              - /url: https://www.instagram.com/changelog_
+      - generic [ref=f38e399]:
+        - heading "Community" [level=4] [ref=f38e400]
+        - list [ref=f38e401]:
+          - listitem [ref=f38e402]:
+            - link "Join" [ref=f38e403] [cursor=pointer]:
+              - /url: /community
+          - listitem [ref=f38e404]:
+            - link "Zulip" [ref=f38e405] [cursor=pointer]:
+              - /url: https://changelog.zulipchat.com
+          - listitem [ref=f38e406]:
+            - link "Merch Shop" [ref=f38e407] [cursor=pointer]:
+              - /url: https://merch.changelog.com
+          - listitem [ref=f38e408]:
+            - link "Code of Conduct" [ref=f38e409] [cursor=pointer]:
+              - /url: /coc
+          - listitem [ref=f38e410]: "---"
+          - listitem [ref=f38e411]:
+            - link "Submit News" [ref=f38e412] [cursor=pointer]:
+              - /url: /news/submit
+          - listitem [ref=f38e413]:
+            - link "Request Episode" [ref=f38e414] [cursor=pointer]:
+              - /url: /request
+      - generic [ref=f38e415]:
+        - heading "Etc." [level=4] [ref=f38e416]
+        - list [ref=f38e417]:
+          - listitem [ref=f38e418]:
+            - link "Beats" [ref=f38e419] [cursor=pointer]:
+              - /url: /beats
+          - listitem [ref=f38e420]:
+            - link "Posts" [ref=f38e421] [cursor=pointer]:
+              - /url: /posts
+          - listitem [ref=f38e422]:
+            - link "Search" [ref=f38e423] [cursor=pointer]:
+              - /url: /search
+          - listitem [ref=f38e424]:
+            - link "Nightly" [ref=f38e425] [cursor=pointer]:
+              - /url: /nightly
+          - listitem [ref=f38e426]:
+            - link "Sponsor" [ref=f38e427] [cursor=pointer]:
+              - /url: /sponsor
+          - listitem [ref=f38e428]:
+            - link "Guest Guide" [ref=f38e429] [cursor=pointer]:
+              - /url: /guest
+          - listitem [ref=f38e430]:
+            - link "View Source" [ref=f38e431] [cursor=pointer]:
+              - /url: https://github.com/thechangelog/changelog.com
+          - listitem [ref=f38e432]: "---"
+          - listitem [ref=f38e433]:
+            - link "Privacy Policy" [ref=f38e434] [cursor=pointer]:
+              - /url: /privacy
+          - listitem [ref=f38e435]:
+            - link "Report an Issue" [ref=f38e436] [cursor=pointer]:
+              - /url: https://github.com/thechangelog/changelog.com/issues/new
+          - listitem [ref=f38e437]:
+            - link "Terms & Conditions" [ref=f38e438] [cursor=pointer]:
+              - /url: /terms
+          - listitem [ref=f38e439]: "---"
+          - listitem [ref=f38e440]:
+            - link "Status" [ref=f38e441] [cursor=pointer]:
+              - /url: https://status.changelog.com
+    - generic [ref=f38e443]:
+      - link [ref=f38e445] [cursor=pointer]:
+        - /url: https://www.fastly.com/?utm_source=changelog
+        - paragraph [ref=f38e446]: Bandwidth
+        - img "Fastly" [ref=f38e447]
+      - link [ref=f38e449] [cursor=pointer]:
+        - /url: https://fly.io
+        - paragraph [ref=f38e450]: Hosting
+        - img "Fly" [ref=f38e451]
+      - link [ref=f38e453] [cursor=pointer]:
+        - /url: https://typesense.org/?utm_source=changelog&utm_campaign=changelog-search&utm_medium=referral
+        - paragraph [ref=f38e454]: Search
+        - img "Typesense" [ref=f38e455]

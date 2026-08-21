@@ -69,7 +69,7 @@ a time, capped at 5MB. Bigger parts are served raw at
 short-lived signed link the tool returns when it refuses an oversized part.
 Nothing in the process holds write access to any account.
 
-Ten tools, all read-only:
+Eleven tools, all read-only:
 
 | Tool | What it does |
 |---|---|
@@ -82,6 +82,7 @@ Ten tools, all read-only:
 | `text` | Return the plain-text body of one message, converting HTML. |
 | `folders` | List accounts, their folders, index tags, and each account's last sync and last error. |
 | `refresh` | Sync INBOX now and report how many messages arrived. |
+| `status` | Sync health per account: first-sync completion, last sync, messages indexed, errors and backoff. |
 | `attachment` | One attachment or MIME part of a message, by part number from `show`. Images and binaries as typed content, text as a marked block. Parts over 5MB get a signed download link instead. |
 
 `search`, `ids`, `files` and `count` take a notmuch query (`from:`, `to:`,
@@ -509,7 +510,7 @@ An account name must be unique. At least one account is required; an empty
 | `INDEX` | yes | — | notmuch/Xapian index directory. |
 | `PUBLIC_URL` | yes | — | The external URL the server is reached at, exactly as a client will use it (a trailing slash, if any, is stripped). Used in OAuth metadata and must match what you type into the client. |
 | `OAUTH_PASSPHRASE` | yes | — | The one passphrase that gates the consent screen. |
-| `SYNC_INTERVAL` | no | `5m` | Full-sync period, as a Go duration (`5m`, `1h`). |
+| `SYNC_INTERVAL` | no | `5m` | Full-sync period, as a Go duration (`5m`, `1h`). An account that keeps failing is retried at twice this interval, then four times, capped at an hour, so a provider outage or quota lockout is not hammered. |
 | `SYNC_TIMEOUT` | no | `1h` | Per-account deadline for one mbsync run, as a Go duration. Raise it if a large first mirror is still running when it hits this and gets cut off — a mailbox in the tens of thousands of messages can take well over the default. |
 | `LISTEN_ADDR` | no | `:8080` | Address the HTTP server binds. |
 | `INIT_MIRROR` | no | unset | Set to `1` to sync into an empty directory that is not a mount point. Not needed with compose, where `/mail` is a volume. |

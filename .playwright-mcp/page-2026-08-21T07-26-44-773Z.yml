@@ -1,0 +1,294 @@
+- generic [active] [ref=f4e1]:
+  - banner [ref=f4e2]:
+    - generic [ref=f4e4]:
+      - paragraph [ref=f4e5]:
+        - link "Changelog" [ref=f4e6] [cursor=pointer]:
+          - /url: /
+      - navigation [ref=f4e7]:
+        - generic [ref=f4e8]:
+          - list [ref=f4e9]:
+            - listitem [ref=f4e10]:
+              - link "Podcasts" [ref=f4e11] [cursor=pointer]:
+                - /url: /
+            - listitem [ref=f4e12]:
+              - link "News" [ref=f4e13] [cursor=pointer]:
+                - /url: /news
+            - listitem [ref=f4e14]:
+              - link "Beats" [ref=f4e15] [cursor=pointer]:
+                - /url: /beats
+            - listitem [ref=f4e16]:
+              - link "Community" [ref=f4e17] [cursor=pointer]:
+                - /url: /community
+            - listitem [ref=f4e18]:
+              - link "Merch" [ref=f4e19] [cursor=pointer]:
+                - /url: https://merch.changelog.com
+            - listitem [ref=f4e20]:
+              - link "Changelog++" [ref=f4e21] [cursor=pointer]:
+                - /url: /++
+          - generic [ref=f4e22]:
+            - list [ref=f4e23]:
+              - listitem [ref=f4e24]:
+                - link "Submit News" [ref=f4e25] [cursor=pointer]:
+                  - /url: /news/submit
+            - list [ref=f4e26]:
+              - listitem [ref=f4e27]:
+                - link "Sign In" [ref=f4e28] [cursor=pointer]:
+                  - /url: /in
+            - textbox "Search" [ref=f4e30]:
+              - /placeholder: Search Changelog
+  - text: ~ $
+  - main [ref=f4e31]:
+    - generic [ref=f4e32]:
+      - heading [level=1] [ref=f4e33]:
+        - text: Want something featured in
+        - emphasis [ref=f4e34]: Changelog News
+        - text: "?"
+      - paragraph [ref=f4e37]:
+        - text: Please
+        - link "sign in" [ref=f4e38] [cursor=pointer]:
+          - /url: /in
+        - text: /
+        - link "up" [ref=f4e39] [cursor=pointer]:
+          - /url: /join
+        - text: to submit news. Your profile is used for attribution and notification.
+      - generic [ref=f4e40]:
+        - paragraph [ref=f4e41]: Submitting other people's work is encouraged. Submitting your own work is also encouraged.
+        - paragraph [ref=f4e42]: Here's a short list of things that we aren't interested in 🙅‍♂️
+        - list [ref=f4e43]:
+          - listitem [ref=f4e44]: 🚫 How-to's and tutorials. e.g. - "Configure Nginx on Ubuntu Linux 18.04"
+          - listitem [ref=f4e45]:
+            - text: 🚫 Commercial products/services.
+            - link "Sponsorship" [ref=f4e46] [cursor=pointer]:
+              - /url: /sponsor/pricing
+            - text: is your path.
+          - listitem [ref=f4e47]:
+            - text: 🚫 Reader-hostile websites. We consider the entire
+            - link "reading experience" [ref=f4e48] [cursor=pointer]:
+              - /url: https://www.youtube.com/watch?v=7UG8JxTEhAk
+            - text: .
+          - listitem [ref=f4e49]:
+            - text: 🚫 Podcast episode suggestions. Use
+            - link "this form" [ref=f4e50] [cursor=pointer]:
+              - /url: /request
+            - text: instead.
+        - paragraph
+        - paragraph [ref=f4e51]:
+          - text: "The golden rule:"
+          - mark [ref=f4e52]: if your fellow devs will find it interesting, submit it.
+          - text: That being said... we get
+          - emphasis [ref=f4e53]: a lot
+          - text: of submissions. Do your best to convince us why something is newsworthy. You'll be notified via email
+          - emphasis [ref=f4e54]: if and when
+          - text: your submission gets published.
+        - paragraph [ref=f4e55]: Keep it positive. Keep it hacker. 💚
+        - separator [ref=f4e56]
+        - paragraph [ref=f4e57]
+      - generic [ref=f4e58]:
+        - generic [ref=f4e60]:
+          - generic [ref=f4e61]: URL*
+          - textbox "https://example.com" [disabled] [ref=f4e62]
+        - generic [ref=f4e64]:
+          - generic [ref=f4e65]: Title*
+          - textbox "Project/Article title..." [disabled] [ref=f4e66]
+        - generic [ref=f4e68]:
+          - text: What's interesting about it?
+          - textbox "Proverbial elevator pitch..." [disabled] [ref=f4e69]
+          - paragraph [ref=f4e70]: Markdown supported
+        - generic [ref=f4e71]:
+          - paragraph
+          - button "Submit" [disabled] [ref=f4e73] [cursor=pointer]
+  - contentinfo [ref=f4e74]:
+    - navigation [ref=f4e75]:
+      - generic [ref=f4e76]:
+        - list [ref=f4e77]:
+          - listitem [ref=f4e78]:
+            - link "About" [ref=f4e79] [cursor=pointer]:
+              - /url: /about
+          - listitem [ref=f4e80]:
+            - link "Contact" [ref=f4e81] [cursor=pointer]:
+              - /url: /contact
+          - listitem [ref=f4e82]:
+            - link "888-974-CHLG (2454)" [ref=f4e83] [cursor=pointer]:
+              - /url: tel:+1-888-974-2454
+        - list [ref=f4e84]:
+          - listitem [ref=f4e85]:
+            - link [ref=f4e86] [cursor=pointer]:
+              - /url: https://www.youtube.com/changelog
+              - img "YouTube Icon" [ref=f4e87]
+          - listitem [ref=f4e88]:
+            - link [ref=f4e89] [cursor=pointer]:
+              - /url: https://bsky.app/profile/changelog.com
+              - img "Bluesky Icon" [ref=f4e90]
+          - listitem [ref=f4e91]:
+            - link [ref=f4e92] [cursor=pointer]:
+              - /url: https://x.com/changelog
+              - img "X Icon" [ref=f4e93]
+          - listitem [ref=f4e94]:
+            - link [ref=f4e95] [cursor=pointer]:
+              - /url: https://changelog.social
+              - img "Mastodon Icon" [ref=f4e96]
+          - listitem [ref=f4e97]:
+            - link [ref=f4e98] [cursor=pointer]:
+              - /url: https://linkedin.com/company/changelog
+              - img "LinkedIn Icon" [ref=f4e99]
+          - listitem [ref=f4e100]:
+            - link [ref=f4e101] [cursor=pointer]:
+              - /url: https://github.com/thechangelog
+              - img "GitHub Icon" [ref=f4e102]
+          - listitem [ref=f4e103]:
+            - link [ref=f4e104] [cursor=pointer]:
+              - /url: https://www.instagram.com/changelog_
+              - img "Instagram Icon" [ref=f4e105]
+          - listitem [ref=f4e106]:
+            - link [ref=f4e107] [cursor=pointer]:
+              - /url: https://www.tiktok.com/@changelog.com
+              - img "TikTok Icon" [ref=f4e108]
+    - navigation [ref=f4e109]:
+      - generic [ref=f4e110]:
+        - heading [level=4] [ref=f4e111]:
+          - link "Podcasts" [ref=f4e112] [cursor=pointer]:
+            - /url: /podcasts
+        - list [ref=f4e113]:
+          - listitem [ref=f4e114]:
+            - link "Changelog News" [ref=f4e115] [cursor=pointer]:
+              - /url: /news
+          - listitem [ref=f4e116]:
+            - link "Changelog Interviews" [ref=f4e117] [cursor=pointer]:
+              - /url: /podcast
+          - listitem [ref=f4e118]:
+            - link "Changelog & Friends" [ref=f4e119] [cursor=pointer]:
+              - /url: /friends
+          - listitem [ref=f4e120]:
+            - link "Changelog++" [ref=f4e121] [cursor=pointer]:
+              - /url: /plusplus
+          - listitem [ref=f4e122]: "---"
+          - listitem [ref=f4e123]:
+            - link "Practical AI" [ref=f4e124] [cursor=pointer]:
+              - /url: /practicalai
+          - listitem [ref=f4e125]:
+            - link "JS Party" [ref=f4e126] [cursor=pointer]:
+              - /url: /jsparty
+          - listitem [ref=f4e127]:
+            - link "Ship It!" [ref=f4e128] [cursor=pointer]:
+              - /url: /shipit
+          - listitem [ref=f4e129]:
+            - link "Founders Talk" [ref=f4e130] [cursor=pointer]:
+              - /url: /founderstalk
+          - listitem [ref=f4e131]:
+            - link "Go Time" [ref=f4e132] [cursor=pointer]:
+              - /url: /gotime
+          - listitem [ref=f4e133]:
+            - link "Request For Commits" [ref=f4e134] [cursor=pointer]:
+              - /url: /rfc
+          - listitem [ref=f4e135]:
+            - link "Brain Science" [ref=f4e136] [cursor=pointer]:
+              - /url: /brainscience
+          - listitem [ref=f4e137]:
+            - link "Backstage" [ref=f4e138] [cursor=pointer]:
+              - /url: /backstage
+          - listitem [ref=f4e139]:
+            - link "Spotlight" [ref=f4e140] [cursor=pointer]:
+              - /url: /spotlight
+          - listitem [ref=f4e141]:
+            - link "Away from Keyboard" [ref=f4e142] [cursor=pointer]:
+              - /url: /afk
+      - generic [ref=f4e143]:
+        - heading "Social" [level=4] [ref=f4e144]
+        - list [ref=f4e145]:
+          - listitem [ref=f4e146]:
+            - link "TwiX" [ref=f4e147] [cursor=pointer]:
+              - /url: https://twitter.com/changelog
+          - listitem [ref=f4e148]:
+            - link "GitHub" [ref=f4e149] [cursor=pointer]:
+              - /url: https://github.com/thechangelog
+          - listitem [ref=f4e150]:
+            - link "TikTok" [ref=f4e151] [cursor=pointer]:
+              - /url: https://www.tiktok.com/@changelog.com
+          - listitem [ref=f4e152]:
+            - link "YouTube" [ref=f4e153] [cursor=pointer]:
+              - /url: https://www.youtube.com/changelog
+          - listitem [ref=f4e154]:
+            - link "Bluesky" [ref=f4e155] [cursor=pointer]:
+              - /url: https://bsky.app/profile/changelog.com
+          - listitem [ref=f4e156]:
+            - link "LinkedIn" [ref=f4e157] [cursor=pointer]:
+              - /url: https://linkedin.com/company/changelog
+          - listitem [ref=f4e158]:
+            - link "Mastodon" [ref=f4e159] [cursor=pointer]:
+              - /url: https://changelog.social
+          - listitem [ref=f4e160]:
+            - link "Instagram" [ref=f4e161] [cursor=pointer]:
+              - /url: https://www.instagram.com/changelog_
+      - generic [ref=f4e162]:
+        - heading "Community" [level=4] [ref=f4e163]
+        - list [ref=f4e164]:
+          - listitem [ref=f4e165]:
+            - link "Join" [ref=f4e166] [cursor=pointer]:
+              - /url: /community
+          - listitem [ref=f4e167]:
+            - link "Zulip" [ref=f4e168] [cursor=pointer]:
+              - /url: https://changelog.zulipchat.com
+          - listitem [ref=f4e169]:
+            - link "Merch Shop" [ref=f4e170] [cursor=pointer]:
+              - /url: https://merch.changelog.com
+          - listitem [ref=f4e171]:
+            - link "Code of Conduct" [ref=f4e172] [cursor=pointer]:
+              - /url: /coc
+          - listitem [ref=f4e173]: "---"
+          - listitem [ref=f4e174]:
+            - link "Submit News" [ref=f4e175] [cursor=pointer]:
+              - /url: /news/submit
+          - listitem [ref=f4e176]:
+            - link "Request Episode" [ref=f4e177] [cursor=pointer]:
+              - /url: /request
+      - generic [ref=f4e178]:
+        - heading "Etc." [level=4] [ref=f4e179]
+        - list [ref=f4e180]:
+          - listitem [ref=f4e181]:
+            - link "Beats" [ref=f4e182] [cursor=pointer]:
+              - /url: /beats
+          - listitem [ref=f4e183]:
+            - link "Posts" [ref=f4e184] [cursor=pointer]:
+              - /url: /posts
+          - listitem [ref=f4e185]:
+            - link "Search" [ref=f4e186] [cursor=pointer]:
+              - /url: /search
+          - listitem [ref=f4e187]:
+            - link "Nightly" [ref=f4e188] [cursor=pointer]:
+              - /url: /nightly
+          - listitem [ref=f4e189]:
+            - link "Sponsor" [ref=f4e190] [cursor=pointer]:
+              - /url: /sponsor
+          - listitem [ref=f4e191]:
+            - link "Guest Guide" [ref=f4e192] [cursor=pointer]:
+              - /url: /guest
+          - listitem [ref=f4e193]:
+            - link "View Source" [ref=f4e194] [cursor=pointer]:
+              - /url: https://github.com/thechangelog/changelog.com
+          - listitem [ref=f4e195]: "---"
+          - listitem [ref=f4e196]:
+            - link "Privacy Policy" [ref=f4e197] [cursor=pointer]:
+              - /url: /privacy
+          - listitem [ref=f4e198]:
+            - link "Report an Issue" [ref=f4e199] [cursor=pointer]:
+              - /url: https://github.com/thechangelog/changelog.com/issues/new
+          - listitem [ref=f4e200]:
+            - link "Terms & Conditions" [ref=f4e201] [cursor=pointer]:
+              - /url: /terms
+          - listitem [ref=f4e202]: "---"
+          - listitem [ref=f4e203]:
+            - link "Status" [ref=f4e204] [cursor=pointer]:
+              - /url: https://status.changelog.com
+    - generic [ref=f4e206]:
+      - link [ref=f4e208] [cursor=pointer]:
+        - /url: https://www.fastly.com/?utm_source=changelog
+        - paragraph [ref=f4e209]: Bandwidth
+        - img "Fastly" [ref=f4e210]
+      - link [ref=f4e212] [cursor=pointer]:
+        - /url: https://fly.io
+        - paragraph [ref=f4e213]: Hosting
+        - img "Fly" [ref=f4e214]
+      - link [ref=f4e216] [cursor=pointer]:
+        - /url: https://typesense.org/?utm_source=changelog&utm_campaign=changelog-search&utm_medium=referral
+        - paragraph [ref=f4e217]: Search
+        - img "Typesense" [ref=f4e218]

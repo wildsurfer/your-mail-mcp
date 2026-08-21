@@ -612,3 +612,49 @@ func TestExcludedFoldersUnionsSpecialUseWithKnownNames(t *testing.T) {
 		}
 	}
 }
+
+func TestSyncBacksOffAfterConsecutiveFailures(t *testing.T) {
+	s, calls := testSyncer(t)
+
+	// testSyncer's runCmd fails for targets beginning "work". Two scheduled
+	// passes: the first failure retries normally, the second sets a backoff.
+	for i := 0; i < 2; i++ {
+		if _, err := s.Sync(context.Background(), "", ""); err != nil {
+			t.Fatalf("pass %d: %v", i, err)
+		}
+	}
+	workRuns := 0
+	for _, c := range *calls {
+		if strings.HasPrefix(c, "work") {
+			workRuns++
+		}
+	}
+	if workRuns != 2 {
+		t.Fatalf("work ran %d times in two passes, want 2", workRuns)
+	}
+	if s.Status()["work"].NextRetry.IsZero() {
+		t.Fatal("two consecutive failures set no backoff")
+	}
+
+	// The third scheduled pass skips the backed-off account.
+	if _, err := s.Sync(context.Background(), "", ""); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range (*calls)[len(*calls)-1:] {
+		if strings.HasPrefix(c, "work") {
+			t.Fatal("a backed-off account was synced by the scheduled pass")
+		}
+	}
+
+	// A manual refresh of that account ignores the backoff.
+	before := len(*calls)
+	_, _ = s.Sync(context.Background(), "work", "INBOX")
+	if len(*calls) != before+1 {
+		t.Fatal("a manual refresh must bypass backoff")
+	}
+
+	// The healthy account never backs off.
+	if !s.Status()["home"].NextRetry.IsZero() {
+		t.Error("the healthy account has a backoff")
+	}
+}

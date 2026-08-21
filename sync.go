@@ -27,6 +27,11 @@ import (
 type AccountStatus struct {
 	LastSync  time.Time
 	LastError string
+	// Failures counts consecutive failed syncs; NextRetry is when the
+	// scheduled ticker may try this account again. A manual refresh of one
+	// account ignores both.
+	Failures  int
+	NextRetry time.Time
 }
 
 // genNotmuchConfig writes the index configuration. mail_root points at the
@@ -172,6 +177,10 @@ type Syncer struct {
 	mbsyncConfig string
 	initMirror   bool
 	timeout      time.Duration
+	// interval is the scheduled sync cadence, used as the backoff base so a
+	// provider that keeps refusing (quota, outage) is retried at 2x, 4x...
+	// the normal cadence, capped at an hour, instead of hammered every tick.
+	interval time.Duration
 
 	runCmd  func(ctx context.Context, name string, args ...string) error
 	reindex func(ctx context.Context) (int, error)
@@ -192,6 +201,7 @@ func newSyncer(cfg *Config, maildir, index, mbsyncConfig string, nm *Notmuch) *S
 		index:        index,
 		mbsyncConfig: mbsyncConfig,
 		timeout:      time.Hour,
+		interval:     5 * time.Minute,
 		mountPoint:   isMountPoint,
 		status:       map[string]AccountStatus{},
 		runCmd: func(ctx context.Context, name string, args ...string) error {
@@ -242,6 +252,16 @@ func (s *Syncer) Sync(ctx context.Context, account, folder string) (int, error) 
 	for _, a := range s.cfg.Accounts {
 		if account != "" && a.Name != account {
 			continue
+		}
+		if account == "" {
+			s.mu.Lock()
+			retry := s.status[a.Name].NextRetry
+			s.mu.Unlock()
+			if time.Now().Before(retry) {
+				fmt.Fprintf(os.Stderr, "sync: account %s: backing off until %s\n",
+					a.Name, retry.UTC().Format(time.RFC3339))
+				continue
+			}
 		}
 		// mbsync creates mailboxes inside a store, but not the store's own
 		// root, so a first run against a fresh volume fails with "cannot open
@@ -351,11 +371,38 @@ func (s *Syncer) record(account string, err error) {
 	st := s.status[account]
 	if err != nil {
 		st.LastError = err.Error()
+		st.Failures++
+		// The first failure retries at the normal cadence: transient blips
+		// should not slow a healthy account. From the second consecutive
+		// failure the delay doubles each time, capped at an hour, which
+		// turns a day-long provider lockout into ~30 attempts, not ~300.
+		if st.Failures >= 2 {
+			delay := s.interval
+			for i := 2; i <= st.Failures && delay < time.Hour; i++ {
+				delay *= 2
+			}
+			if delay > time.Hour {
+				delay = time.Hour
+			}
+			st.NextRetry = time.Now().Add(delay)
+		}
 	} else {
 		st.LastError = ""
 		st.LastSync = time.Now()
+		st.Failures = 0
+		st.NextRetry = time.Time{}
 	}
 	s.status[account] = st
+}
+
+// Busy reports whether a sync pass is running right now. It probes the
+// single-sync lock rather than keeping a second flag that could drift.
+func (s *Syncer) Busy() bool {
+	if s.running.TryLock() {
+		s.running.Unlock()
+		return false
+	}
+	return true
 }
 
 // Status returns a copy of the per-account sync state, safe to read while a

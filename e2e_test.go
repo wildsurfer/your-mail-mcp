@@ -130,8 +130,8 @@ func TestEndToEndRegisterAuthorizeTokenCall(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(tools.Tools) != 10 {
-		t.Errorf("got %d tools, want 10", len(tools.Tools))
+	if len(tools.Tools) != 11 {
+		t.Errorf("got %d tools, want 11", len(tools.Tools))
 	}
 
 	res, err := session.CallTool(ctx, &mcp.CallToolParams{
