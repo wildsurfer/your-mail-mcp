@@ -510,7 +510,7 @@ An account name must be unique. At least one account is required; an empty
 | `INDEX` | yes | — | notmuch/Xapian index directory. |
 | `PUBLIC_URL` | yes | — | The external URL the server is reached at, exactly as a client will use it (a trailing slash, if any, is stripped). Used in OAuth metadata and must match what you type into the client. |
 | `OAUTH_PASSPHRASE` | yes | — | The one passphrase that gates the consent screen. |
-| `SYNC_INTERVAL` | no | `5m` | Full-sync period, as a Go duration (`5m`, `1h`). An account that keeps failing is retried at twice this interval, then four times, capped at an hour, so a provider outage or quota lockout is not hammered. |
+| `SYNC_INTERVAL` | no | `10m` | Full-sync period, as a Go duration (`5m`, `1h`). The default follows Google's recommended IMAP client cadence of 10 minutes. An account that keeps failing is retried at twice this interval, then four times, capped at an hour, so a provider outage or quota lockout is not hammered. |
 | `SYNC_TIMEOUT` | no | `1h` | Per-account deadline for one mbsync run, as a Go duration. Raise it if a large first mirror is still running when it hits this and gets cut off — a mailbox in the tens of thousands of messages can take well over the default. |
 | `LISTEN_ADDR` | no | `:8080` | Address the HTTP server binds. |
 | `INIT_MIRROR` | no | unset | Set to `1` to sync into an empty directory that is not a mount point. Not needed with compose, where `/mail` is a volume. |

@@ -228,8 +228,8 @@ func TestLoadEnvRequiresTheEssentials(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if e.SyncInterval != 5*time.Minute {
-		t.Errorf("SyncInterval = %v, want the 5m default", e.SyncInterval)
+	if e.SyncInterval != 10*time.Minute {
+		t.Errorf("SyncInterval = %v, want the 10m default", e.SyncInterval)
 	}
 	if e.ListenAddr != ":8080" {
 		t.Errorf("ListenAddr = %q, want the :8080 default", e.ListenAddr)

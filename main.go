@@ -151,13 +151,17 @@ type env struct {
 
 func loadEnv() (*env, error) {
 	e := &env{
-		Config:       os.Getenv("CONFIG"),
-		Maildir:      os.Getenv("MAILDIR"),
-		Index:        os.Getenv("INDEX"),
-		PublicURL:    os.Getenv("PUBLIC_URL"),
-		ListenAddr:   os.Getenv("LISTEN_ADDR"),
-		Passphrase:   os.Getenv("OAUTH_PASSPHRASE"),
-		SyncInterval: 5 * time.Minute,
+		Config:     os.Getenv("CONFIG"),
+		Maildir:    os.Getenv("MAILDIR"),
+		Index:      os.Getenv("INDEX"),
+		PublicURL:  os.Getenv("PUBLIC_URL"),
+		ListenAddr: os.Getenv("LISTEN_ADDR"),
+		Passphrase: os.Getenv("OAUTH_PASSPHRASE"),
+		// 10 minutes is the one cadence a provider actually publishes:
+		// Google's recommended IMAP client settings say "check for new
+		// messages every 10 minutes". iCloud documents nothing but is
+		// known to throttle eager clients.
+		SyncInterval: 10 * time.Minute,
 		SyncTimeout:  time.Hour,
 		InitMirror:   os.Getenv("INIT_MIRROR") == "1",
 	}

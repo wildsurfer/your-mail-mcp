@@ -201,7 +201,7 @@ func newSyncer(cfg *Config, maildir, index, mbsyncConfig string, nm *Notmuch) *S
 		index:        index,
 		mbsyncConfig: mbsyncConfig,
 		timeout:      time.Hour,
-		interval:     5 * time.Minute,
+		interval:     10 * time.Minute,
 		mountPoint:   isMountPoint,
 		status:       map[string]AccountStatus{},
 		runCmd: func(ctx context.Context, name string, args ...string) error {
