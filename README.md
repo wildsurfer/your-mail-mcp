@@ -571,7 +571,13 @@ through this server yet.
   accept the account password directly over IMAP. Gmail also keeps a copy of
   essentially everything in `[Gmail]/All Mail`, so a Gmail account's mirror
   is roughly double the size of what the folder list suggests, since most
-  messages exist both under their folder and under All Mail.
+  messages exist both under their folder and under All Mail. The first
+  mirror of a large Gmail account takes hours, and Google also enforces a
+  daily IMAP download quota (about 2.5GB per day), so a multi-gigabyte
+  mailbox spreads its first mirror over several days. This is normal: the
+  server keeps retrying on its schedule and mbsync resumes where it
+  stopped. Set `SYNC_TIMEOUT` to something like `8h` for the first mirror
+  so a long run is not cut off by the default one-hour deadline.
 - **Dovecot** servers (many self-hosted and smaller providers) commonly
   prefix folder names with `INBOX.` (e.g. `INBOX.Sent`). If `folders` shows
   folder names you didn't expect, this is usually why.
