@@ -42,9 +42,10 @@ mirrors one or more IMAP accounts into a local maildir with
 ![How your-mail-mcp works: mail is pulled from IMAP providers into a local mirror, indexed by notmuch, and served to an MCP client through an OAuth gate, with no write path back to the providers](docs/diagrams/how-it-works.png)
 
 Mail only ever moves left to right in that picture. The one arrow the server
-makes back toward a provider is a single IMAP `LIST` at startup, to find out
-what that server calls its junk and trash folders; it never selects a mailbox
-and never fetches a message. The diagram source is
+makes back toward a provider is an IMAP `LIST`, issued once per account at
+startup and repeated hourly, to find out what that server calls its junk and
+trash folders; it never selects a mailbox and never fetches a message. The
+diagram source is
 [`docs/diagrams/how-it-works.html`](docs/diagrams/how-it-works.html).
 
 ## What it cannot do
@@ -57,10 +58,12 @@ that configuration can push a change back to the server, delete a message, or
 expunge one.
 
 The only IMAP operation anywhere in the Go code is `LIST`, issued once per
-account at startup to find each account's junk and trash folders (see
-[Provider notes](#provider-notes) and [Troubleshooting](#troubleshooting)).
-That connection logs in, lists mailboxes, and logs out. It never selects a
-mailbox and never fetches a message.
+account at startup and repeated hourly to find each account's junk and trash
+folders (see [Provider notes](#provider-notes) and
+[Troubleshooting](#troubleshooting)). An account whose `exclude_folders` is
+set by hand skips that call entirely. That connection logs in, lists
+mailboxes, and logs out. It never selects a mailbox and never fetches a
+message.
 
 There is no send, no delete, no move, and no tag. Attachments are listed in
 `show` and `thread` and served read-only by the `attachment` tool, one part
