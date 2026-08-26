@@ -838,7 +838,9 @@ func attachmentFixture(t *testing.T) *Server {
 		"Content-Type: multipart/mixed; boundary=B\r\n\r\n" +
 		"--B\r\nContent-Type: text/plain\r\n\r\nsee attached\r\n" +
 		"--B\r\nContent-Type: image/png\r\nContent-Disposition: attachment; filename=dot.png\r\n" +
-		"Content-Transfer-Encoding: base64\r\n\r\n" + tinyPNG + "\r\n--B--\r\n"
+		"Content-Transfer-Encoding: base64\r\n\r\n" + tinyPNG + "\r\n" +
+		"--B\r\nContent-Type: application/pdf\r\nContent-Disposition: attachment; filename=doc.pdf\r\n\r\n%PDF-1.4 fake\r\n" +
+		"--B\r\nContent-Type: application/json\r\nContent-Disposition: attachment; filename=invoice.json\r\n\r\n{\"total\": 42}\r\n--B--\r\n"
 	maildir, _, config := newFixture(t, map[string][]string{"work/INBOX": {msg}})
 	return newServer(&Config{Accounts: []Account{{Name: "work"}}}, newNotmuch(config), maildir)
 }
@@ -985,5 +987,40 @@ func TestStatusToolReportsFirstSyncAndBackoff(t *testing.T) {
 		if !strings.Contains(out, want) {
 			t.Errorf("status output missing %q\n%s", want, out)
 		}
+	}
+}
+
+func TestAttachmentBinaryReturnsLinkNotBlob(t *testing.T) {
+	s := attachmentFixture(t)
+	s.publicURL = "https://example.test"
+	// part 4 is the application/pdf attachment
+	out, _, err := s.attachmentTool(context.Background(), nil, attachmentArgs{ID: "att1@example.com", Part: 4})
+	if err != nil {
+		t.Fatal(err)
+	}
+	txt, ok := out.Content[0].(*mcp.TextContent)
+	if !ok {
+		t.Fatalf("content is %T, want *mcp.TextContent with a link", out.Content[0])
+	}
+	for _, want := range []string{"application/pdf", "doc.pdf", "https://example.test/attachment/att1@example.com/4?exp="} {
+		if !strings.Contains(txt.Text, want) {
+			t.Errorf("link response missing %q\n%s", want, txt.Text)
+		}
+	}
+}
+
+func TestAttachmentJSONIsRenderedAsText(t *testing.T) {
+	s := attachmentFixture(t)
+	// part 5 is the application/json attachment
+	out, _, err := s.attachmentTool(context.Background(), nil, attachmentArgs{ID: "att1@example.com", Part: 5})
+	if err != nil {
+		t.Fatal(err)
+	}
+	txt := out.Content[0].(*mcp.TextContent).Text
+	if !strings.HasPrefix(txt, untrustedOpen) {
+		t.Error("json part is not wrapped as untrusted content")
+	}
+	if !strings.Contains(txt, `{"total": 42}`) {
+		t.Errorf("json body missing:\n%s", txt)
 	}
 }

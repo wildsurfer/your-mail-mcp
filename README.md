@@ -63,11 +63,11 @@ That connection logs in, lists mailboxes, and logs out. It never selects a
 mailbox and never fetches a message.
 
 There is no send, no delete, no move, and no tag. Attachments are listed in
-`show` and `thread` and served read-only by the `attachment` tool, one part at
-a time, capped at 5MB. Bigger parts are served raw at
-`GET /attachment/{id}/{part}`, authenticated by a bearer token or by the
-short-lived signed link the tool returns when it refuses an oversized part.
-Nothing in the process holds write access to any account.
+`show` and `thread` and served read-only by the `attachment` tool, one part
+at a time: images inline up to 5MB, textual parts as marked text, and other
+binaries as a short-lived signed link to `GET /attachment/{id}/{part}`
+(a bearer token works there too). Nothing in the process holds write access
+to any account.
 
 Eleven tools, all read-only:
 
@@ -83,7 +83,7 @@ Eleven tools, all read-only:
 | `folders` | List accounts, their folders, index tags, and each account's last sync and last error. |
 | `refresh` | Sync INBOX now and report how many messages arrived. |
 | `status` | Sync health per account: first-sync completion, last sync, messages indexed, errors and backoff. |
-| `attachment` | One attachment or MIME part of a message, by part number from `show`. Images and binaries as typed content, text as a marked block. Parts over 5MB get a signed download link instead. |
+| `attachment` | One attachment or MIME part of a message, by part number from `show`. Images inline, text (JSON and XML included) as a marked block, other binaries as a signed download link. |
 
 `search`, `ids`, `files` and `count` take a notmuch query (`from:`, `to:`,
 `subject:`, `tag:`, `folder:`, `date:2026-01-01..2026-06-30`, combined with
@@ -603,6 +603,15 @@ attempt to.
 The OAuth passphrase is checked in constant time and gates the whole server
 with a single shared secret; it is not a per-user credential system. Treat
 `OAUTH_PASSPHRASE` and the mail account passwords with the same care.
+
+A mailbox is a secret store. Password resets, sign-in codes and magic links
+all arrive by mail, so read access alone is enough to take over accounts if
+it lands in the wrong hands or the wrong AI session. The read-only design
+and the untrusted-content markers remove the write path and the instruction
+channel; they do not make mail contents harmless. Connect clients you trust,
+and remember that everyone holding the passphrase sees the whole mailbox —
+there is one consent, not per-user accounts. Agent workflows that need their
+own inboxes need their own addresses, which is a different tool.
 
 `search`'s thread summaries include a display name for every message in a
 matching thread, which a sender controls. A message in a folder excluded by

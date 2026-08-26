@@ -308,10 +308,13 @@ Attachments are listed by filename, media type and size in `show` and `thread`,
 and served one part at a time by the `attachment` tool. Serving was excluded
 from the first release; it was added after real use showed the listing alone
 answers no question a reader actually has. The risks the exclusion guarded are
-handled structurally instead: a 5MB cap bounds the context cost, and binary
-parts, which cannot carry the text markers, return as typed image or blob
-content whose tool schema names them attacker-authored data. Text parts pass
-through `render` like all other mail text.
+handled structurally instead: a 5MB cap bounds the context cost of images,
+which are the one binary type a model can actually read, and they return as
+typed image content whose tool schema names them attacker-authored data.
+Textual parts — text/*, JSON, XML, message/rfc822 — pass through `render`
+like all other mail text. Every other binary returns only a signed download
+link: an inline blob spends megabytes of context on bytes no client renders,
+which real use showed is the worst of both worlds.
 
 Parts over the cap cannot travel through model context at all, so the server
 also serves raw attachment bytes at `GET /attachment/{id}/{part}`, outside
