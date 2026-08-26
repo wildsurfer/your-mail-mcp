@@ -351,7 +351,7 @@ func run() error {
 	go sync(ctx)
 	go runTicker(ctx, e.SyncInterval, sync)
 
-	m := mcp.NewServer(&mcp.Implementation{Name: "your-mail-mcp", Version: "0.1.0"}, nil)
+	m := mcp.NewServer(&mcp.Implementation{Name: "your-mail-mcp", Version: "0.2.0"}, nil)
 	srv.registerTools(m)
 
 	httpSrv := &http.Server{

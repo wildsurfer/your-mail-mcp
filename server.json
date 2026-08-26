@@ -6,11 +6,11 @@
     "url": "https://github.com/wildsurfer/your-mail-mcp",
     "source": "github"
   },
-  "version": "0.1.0",
+  "version": "0.2.0",
   "packages": [
     {
       "registryType": "oci",
-      "identifier": "ghcr.io/wildsurfer/your-mail-mcp:0.1.0",
+      "identifier": "ghcr.io/wildsurfer/your-mail-mcp:0.2.0",
       "transport": {
         "type": "streamable-http",
         "url": "http://localhost:8080/mcp"
