@@ -331,4 +331,17 @@ func TestServeSocketAnswersToolsList(t *testing.T) {
 	if len(res.Tools) != 11 {
 		t.Fatalf("want 11 tools over the socket, got %d", len(res.Tools))
 	}
+
+	// IOTransport does not propagate ctx cancellation on its own, so
+	// serveSocket has to close each session explicitly on shutdown.
+	// Cancelling here should make the client observe the connection
+	// closing shortly after, not only when the test process exits.
+	cancel()
+	waitDone := make(chan error, 1)
+	go func() { waitDone <- sess.Wait() }()
+	select {
+	case <-waitDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("client session Wait did not return within 2s of ctx cancellation")
+	}
 }

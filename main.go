@@ -299,6 +299,14 @@ func serveSocket(ctx context.Context, path string, m *mcp.Server) error {
 			if err != nil {
 				return
 			}
+			// IOTransport does not propagate ctx cancellation into the
+			// session (only a carrier like a one-shot HTTP request does),
+			// so shutdown is driven here instead: closing the session
+			// unblocks Wait below.
+			go func() {
+				<-ctx.Done()
+				_ = sess.Close()
+			}()
 			sess.Wait()
 		}()
 	}
