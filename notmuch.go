@@ -106,10 +106,16 @@ func scopeQuery(q, account string) (string, error) {
 	if strings.ContainsAny(account, `/\ "'`) {
 		return "", fmt.Errorf("account %q: names cannot contain spaces, quotes or slashes", account)
 	}
+	// Both of the account's maildirs: the recent channel mirrors INBOX into a
+	// sibling directory, so a message only it has pulled would otherwise be
+	// invisible to an account-scoped query and to the mirror note's count,
+	// which is exactly the window that channel exists to cover. Parenthesised
+	// so an "and" appended by buildQuery binds to the whole alternation.
+	paths := fmt.Sprintf("(path:%s/** or path:%s-recent/**)", account, account)
 	if q == "" || q == "*" {
-		return fmt.Sprintf("path:%s/**", account), nil
+		return paths, nil
 	}
-	return fmt.Sprintf("(%s) and path:%s/**", q, account), nil
+	return fmt.Sprintf("(%s) and %s", q, paths), nil
 }
 
 // Notmuch runs the notmuch binary. The design calls for executing it rather

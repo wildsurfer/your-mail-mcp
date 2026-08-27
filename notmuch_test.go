@@ -87,8 +87,18 @@ func TestScopeQuery(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got != `(from:alice) and path:work/**` {
+	// Both maildirs, and the alternation parenthesised so the "and" binds to
+	// all of it rather than to the first branch only.
+	if got != `(from:alice) and (path:work/** or path:work-recent/**)` {
 		t.Errorf("scopeQuery = %q", got)
+	}
+
+	got, err = scopeQuery("*", "work")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != `(path:work/** or path:work-recent/**)` {
+		t.Errorf("scopeQuery(*) = %q", got)
 	}
 
 	got, err = scopeQuery("from:alice", "")
@@ -109,6 +119,11 @@ func TestNotmuchCountsAndScopes(t *testing.T) {
 		"work/INBOX": {
 			message("alice@example.com", "me@work", "invoice 42", "a1@example.com", "the invoice is attached"),
 		},
+		// What the recent channel pulls before the full channel has caught
+		// up: work's mail, in work's other maildir.
+		"work-recent/INBOX": {
+			message("carol@example.com", "me@work", "fresh today", "c1@example.com", "just arrived"),
+		},
 		"personal/INBOX": {
 			message("bob@example.com", "me@home", "dinner", "b1@example.com", "are you free"),
 		},
@@ -120,8 +135,8 @@ func TestNotmuchCountsAndScopes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if total != 2 {
-		t.Fatalf("count(*) = %d, want 2", total)
+	if total != 3 {
+		t.Fatalf("count(*) = %d, want 3", total)
 	}
 
 	q, err := scopeQuery("*", "work")
@@ -132,7 +147,7 @@ func TestNotmuchCountsAndScopes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if scoped != 1 {
-		t.Fatalf("count scoped to work = %d, want 1", scoped)
+	if scoped != 2 {
+		t.Fatalf("count scoped to work = %d, want both maildirs' messages", scoped)
 	}
 }
