@@ -360,7 +360,12 @@ func main() {
 	case "serve":
 		err = run(ctx, false)
 	case "bridge":
-		err = bridge(ctx, sock)
+		// A stale socket file is indistinguishable from a live daemon until
+		// the dial fails. run's serveSocket removes the file before
+		// listening, so taking over as the daemon is what heals it.
+		if err = bridge(ctx, sock); errors.Is(err, errNoDaemon) {
+			err = run(ctx, true)
+		}
 	default:
 		err = run(ctx, true)
 	}
@@ -465,6 +470,10 @@ func run(ctx context.Context, stdio bool) error {
 	srv.registerTools(m)
 
 	sock := filepath.Join(e.Index, "mcp.sock")
+	// serveSocket removes the socket when it returns, but that is a
+	// goroutine racing process exit; removing it here as well means a clean
+	// shutdown never leaves a file for the next start to dial into.
+	defer os.Remove(sock)
 	go func() {
 		if err := serveSocket(ctx, sock, m); err != nil {
 			fmt.Fprintln(os.Stderr, "socket:", err)

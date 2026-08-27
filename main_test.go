@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net"
 	"os"
@@ -431,6 +432,27 @@ func TestBridgeIOEndsOnContextCancel(t *testing.T) {
 // mbsync/notmuch and a real HTTP port to exercise end to end), so this
 // exercises the cancellation wiring directly with an IOTransport standing
 // in for stdin.
+// TestBridgeReportsNoDaemonForStaleSocket covers a stale mcp.sock left by an
+// unclean exit. main picks bridge mode on the file existing, so without a
+// distinguishable dial failure "stdio" would exit 1 with "connection
+// refused" until someone deleted the file by hand. This checks the error
+// main keys off; the recovery itself (run(ctx, true), whose serveSocket
+// removes the stale file before listening) needs mbsync and notmuch, so it
+// is not exercised here.
+func TestBridgeReportsNoDaemonForStaleSocket(t *testing.T) {
+	sock := filepath.Join(t.TempDir(), "mcp.sock")
+	if err := os.WriteFile(sock, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := pickMode([]string{"stdio"}, true); got != "bridge" {
+		t.Fatalf("a stale socket file picks %s, want bridge", got)
+	}
+	err := bridgeIO(context.Background(), sock, strings.NewReader(""), io.Discard)
+	if !errors.Is(err, errNoDaemon) {
+		t.Fatalf("bridgeIO on a stale socket returned %v, want an errNoDaemon", err)
+	}
+}
+
 func TestStdioSessionEOFCancelsSharedContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

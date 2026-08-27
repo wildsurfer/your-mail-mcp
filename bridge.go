@@ -2,10 +2,18 @@ package main
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"io"
 	"net"
 	"os"
 )
+
+// errNoDaemon reports that nothing answered on the socket. A stale mcp.sock
+// outlives an unclean exit and looks exactly like a live daemon to main's
+// mode check, so the dial failure is wrapped rather than returned raw: main
+// falls back to running the daemon itself, which clears the file.
+var errNoDaemon = errors.New("no daemon on the socket")
 
 // bridge attaches the calling client to a running daemon: stdin goes to the
 // socket, the socket comes back on stdout. It is a pipe, not a server, so a
@@ -18,7 +26,7 @@ func bridge(ctx context.Context, sock string) error {
 func bridgeIO(ctx context.Context, sock string, in io.Reader, out io.Writer) error {
 	conn, err := net.Dial("unix", sock)
 	if err != nil {
-		return err
+		return fmt.Errorf("%w: %w", errNoDaemon, err)
 	}
 	defer conn.Close()
 	// main registers a signal handler for every mode, which suppresses the
