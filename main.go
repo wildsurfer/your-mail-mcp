@@ -314,12 +314,19 @@ func serveSocket(ctx context.Context, path string, m *mcp.Server) error {
 			// IOTransport does not propagate ctx cancellation into the
 			// session (only a carrier like a one-shot HTTP request does),
 			// so shutdown is driven here instead: closing the session
-			// unblocks Wait below.
+			// unblocks Wait below. done is what retires the watcher when
+			// the session ends on its own, so a client that comes and goes
+			// does not leave a goroutine and its session behind.
+			done := make(chan struct{})
 			go func() {
-				<-ctx.Done()
-				_ = sess.Close()
+				select {
+				case <-ctx.Done():
+					_ = sess.Close()
+				case <-done:
+				}
 			}()
 			sess.Wait()
+			close(done)
 		}()
 	}
 }

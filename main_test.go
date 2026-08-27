@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -345,6 +346,61 @@ func TestServeSocketAnswersToolsList(t *testing.T) {
 	case <-waitDone:
 	case <-time.After(2 * time.Second):
 		t.Fatal("client session Wait did not return within 2s of ctx cancellation")
+	}
+}
+
+// TestServeSocketReleasesTheSessionWatcher covers the watcher goroutine each
+// connection starts to close its session on shutdown. It used to park on
+// ctx.Done with nothing else to wake it, so every client that connected and
+// left cost the daemon one live goroutine and one retained session for the
+// rest of the process's life. Goroutine count is the only observable here,
+// so the test dials many times and waits for the count to come back down.
+func TestServeSocketReleasesTheSessionWatcher(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	// Not t.TempDir(): its path carries the test's name, and a socket path
+	// over 104 bytes fails to connect with EINVAL on macOS.
+	dir, err := os.MkdirTemp("", "ymm")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	sock := filepath.Join(dir, "mcp.sock")
+	m := mcp.NewServer(&mcp.Implementation{Name: "t", Version: "0"}, nil)
+	newServer(&Config{}, nil, t.TempDir()).registerTools(m)
+	go func() { _ = serveSocket(ctx, sock, m) }()
+
+	dialAndLeave := func() {
+		var conn net.Conn
+		var err error
+		for i := 0; i < 50; i++ {
+			if conn, err = net.Dial("unix", sock); err == nil {
+				break
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+		if err != nil {
+			t.Fatalf("socket never came up: %v", err)
+		}
+		conn.Close()
+	}
+
+	// One connection first, so the SDK's own one-time goroutines are already
+	// running when the baseline is taken.
+	dialAndLeave()
+	time.Sleep(100 * time.Millisecond)
+	base := runtime.NumGoroutine()
+
+	const clients = 20
+	for i := 0; i < clients; i++ {
+		dialAndLeave()
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for runtime.NumGoroutine() > base+clients/2 && time.Now().Before(deadline) {
+		time.Sleep(20 * time.Millisecond)
+	}
+	if got := runtime.NumGoroutine(); got > base+clients/2 {
+		t.Fatalf("%d goroutines after %d clients came and went, baseline was %d", got, clients, base)
 	}
 }
 
