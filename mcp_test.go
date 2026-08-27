@@ -1116,3 +1116,22 @@ func TestAttachmentJSONIsRenderedAsText(t *testing.T) {
 		t.Errorf("json body missing:\n%s", txt)
 	}
 }
+
+func TestBinaryAttachmentWithoutHTTPIsSavedToIndex(t *testing.T) {
+	s := newServer(&Config{}, nil, t.TempDir())
+	s.index = t.TempDir()
+	path, err := s.saveAttachment("<a@b>", 3, []byte{0, 1, 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(path, filepath.Join(s.index, "attachments")) {
+		t.Fatalf("saved outside attachments dir: %s", path)
+	}
+	info, err := os.Stat(path)
+	if err != nil || info.Mode().Perm() != 0o600 {
+		t.Fatalf("want a 0600 file, got %v %v", info, err)
+	}
+	if strings.ContainsAny(filepath.Base(path), "<>/") {
+		t.Fatalf("id must be sanitised in the filename: %s", path)
+	}
+}

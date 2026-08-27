@@ -410,6 +410,7 @@ func run(ctx context.Context, stdio bool) error {
 
 	srv := newServer(cfg, nm, e.Maildir)
 	srv.publicURL = strings.TrimSuffix(e.PublicURL, "/")
+	srv.index = e.Index
 	srv.sync = detachedSync(ctx, syncer)
 	srv.syncWait = syncer.Wait
 	srv.syncKick = syncer.Kick
