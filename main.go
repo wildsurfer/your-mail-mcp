@@ -70,15 +70,17 @@ func expandBracedEnv(s string) string {
 // JSON, only a valid Go string.
 func loadConfig(path string) (*Config, error) {
 	raw, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		// No accounts file is a legal way to start: the server answers every
+		// tool and status explains what to configure.
+		return &Config{}, nil
+	}
 	if err != nil {
 		return nil, fmt.Errorf("accounts file: %w", err)
 	}
 	var cfg Config
 	if err := json.Unmarshal(raw, &cfg); err != nil {
 		return nil, fmt.Errorf("accounts file: %w", err)
-	}
-	if len(cfg.Accounts) == 0 {
-		return nil, fmt.Errorf("accounts file: no accounts defined")
 	}
 	seen := map[string]bool{}
 	for i := range cfg.Accounts {
@@ -315,14 +317,6 @@ func run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	// Built before the discovery loop below: a missing OAUTH_PASSPHRASE or
-	// PUBLIC_URL should exit the process immediately, not after logging in
-	// to every configured account first.
-	o, err := newOAuth(filepath.Join(e.Index, "oauth.json"), e.PublicURL, e.Passphrase)
-	if err != nil {
-		return err
-	}
-
 	// Config-tier exclusions touch no network, so they are applied inline
 	// before the listener opens. Full discovery needs a live IMAP login per
 	// account and must not delay startup waiting on an unreachable provider,
@@ -351,9 +345,18 @@ func run() error {
 	go sync(ctx)
 	go runTicker(ctx, e.SyncInterval, sync)
 
-	m := mcp.NewServer(&mcp.Implementation{Name: "your-mail-mcp", Version: "0.2.0"}, nil)
+	m := mcp.NewServer(&mcp.Implementation{Name: "your-mail-mcp", Version: "0.3.0"}, nil)
 	srv.registerTools(m)
 
+	if e.PublicURL == "" {
+		fmt.Fprintln(os.Stderr, "PUBLIC_URL unset: no HTTP listener, local sessions only")
+		<-ctx.Done()
+		return nil
+	}
+	o, err := newOAuth(filepath.Join(e.Index, "oauth.json"), e.PublicURL, e.Passphrase)
+	if err != nil {
+		return err
+	}
 	httpSrv := &http.Server{
 		Addr:              e.ListenAddr,
 		Handler:           newHTTPHandler(o, m, srv),

@@ -87,6 +87,21 @@ func TestLoadConfigExpandsSpecialCharactersSafely(t *testing.T) {
 	}
 }
 
+func TestLoadConfigAllowsMissingFileAndNoAccounts(t *testing.T) {
+	cfg, err := loadConfig(filepath.Join(t.TempDir(), "absent.json"))
+	if err != nil || len(cfg.Accounts) != 0 {
+		t.Fatalf("missing file: cfg=%v err=%v", cfg, err)
+	}
+	p := filepath.Join(t.TempDir(), "empty.json")
+	if err := os.WriteFile(p, []byte(`{"accounts":[]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err = loadConfig(p)
+	if err != nil || len(cfg.Accounts) != 0 {
+		t.Fatalf("empty list: cfg=%v err=%v", cfg, err)
+	}
+}
+
 func TestLoadConfigRejectsBadInput(t *testing.T) {
 	cases := map[string]struct{ body, want string }{
 		"duplicate names": {
@@ -109,10 +124,6 @@ func TestLoadConfigRejectsBadInput(t *testing.T) {
 		"unknown tls": {
 			`{"accounts":[{"name":"a","host":"h","user":"u","password":"p","tls":"wat"}]}`,
 			"tls",
-		},
-		"no accounts": {
-			`{"accounts":[]}`,
-			"no accounts",
 		},
 		"space in host": {
 			`{"accounts":[{"name":"a","host":"imap gmail.com","user":"u","password":"p"}]}`,

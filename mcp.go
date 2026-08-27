@@ -666,6 +666,10 @@ func listFolders(maildir string) (map[string][]string, error) {
 func (s *Server) statusTool(ctx context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, any, error) {
 	st := s.status()
 	var b strings.Builder
+	if len(s.cfg.Accounts) == 0 {
+		b.WriteString("no accounts configured: mount an accounts.json at CONFIG (see README, \"The accounts file\") and restart\n")
+		return page(b.String(), 0, 0), nil, nil
+	}
 	if s.syncBusy != nil && s.syncBusy() {
 		b.WriteString("a sync pass is running right now\n")
 	}

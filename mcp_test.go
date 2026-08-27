@@ -990,6 +990,19 @@ func TestStatusToolReportsFirstSyncAndBackoff(t *testing.T) {
 	}
 }
 
+func TestStatusExplainsNoAccounts(t *testing.T) {
+	s := newServer(&Config{}, nil, t.TempDir())
+	s.status = func() map[string]AccountStatus { return nil }
+	res, _, err := s.statusTool(context.Background(), nil, struct{}{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := res.Content[0].(*mcp.TextContent).Text
+	if !strings.Contains(got, "no accounts configured") || !strings.Contains(got, "accounts.json") {
+		t.Fatalf("status without accounts should say how to configure, got:\n%s", got)
+	}
+}
+
 func TestAttachmentBinaryReturnsLinkNotBlob(t *testing.T) {
 	s := attachmentFixture(t)
 	s.publicURL = "https://example.test"
