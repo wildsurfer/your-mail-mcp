@@ -777,7 +777,8 @@ func (s *Server) refreshTool(ctx context.Context, _ *mcp.CallToolRequest, a refr
 	var b strings.Builder
 	select {
 	case r := <-ch:
-		if r.err != nil && !errors.Is(r.err, errSyncBusy) {
+		joined := errors.Is(r.err, errSyncBusy)
+		if r.err != nil && !joined {
 			// The error carries mbsync's combined output, which is text the
 			// IMAP server chose. Returning it as a Go tool error would put
 			// it in front of the model outside render's untrusted-content
@@ -788,12 +789,20 @@ func (s *Server) refreshTool(ctx context.Context, _ *mcp.CallToolRequest, a refr
 		}
 		// Busy means a pass was already in flight, so join that one rather
 		// than tell the caller to come back later.
-		if errors.Is(r.err, errSyncBusy) && !s.syncWait(ctx, refreshWait) {
+		if joined && !s.syncWait(ctx, refreshWait) {
 			b.WriteString(s.inProgress())
 			break
 		}
+		// A pass has just finished either way, so the next scheduled one is
+		// a full interval from now.
 		if s.syncKick != nil {
 			s.syncKick()
+		}
+		if joined {
+			// No count: what that pass pulled was counted for the caller
+			// that started it, and a zero here would read as "no new mail".
+			b.WriteString("joined a sync that was already running; it has finished. Call status for what it pulled, or search now.\n")
+			break
 		}
 		fmt.Fprintf(&b, "%d new message(s)\n", r.n)
 	case <-time.After(refreshWait):

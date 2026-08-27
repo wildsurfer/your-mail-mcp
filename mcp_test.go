@@ -822,13 +822,21 @@ func TestRefreshReportsBusyWithoutFailing(t *testing.T) {
 	s := testServer(t)
 	s.sync = func(context.Context, string) (int, error) { return 0, errSyncBusy }
 	s.syncWait = func(context.Context, time.Duration) bool { return true }
+	kicked := false
+	s.syncKick = func() { kicked = true }
 
 	res, _, err := s.refreshTool(context.Background(), nil, refreshArgs{})
 	if err != nil {
 		t.Fatalf("a busy syncer is not a tool error: %v", err)
 	}
-	if !strings.Contains(resultText(t, res), "message(s)") {
-		t.Errorf("a pass joined and finished inside the wait should report a count: %s", resultText(t, res))
+	got := resultText(t, res)
+	// No count: the messages that pass pulled were counted for whoever
+	// started it, and a zero here reads as "no new mail".
+	if !strings.Contains(got, "joined") || strings.Contains(got, "new message(s)") {
+		t.Errorf("a pass joined and finished inside the wait must say so without a count: %s", got)
+	}
+	if !kicked {
+		t.Error("a finished pass must still reset the sync ticker")
 	}
 }
 
