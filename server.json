@@ -6,11 +6,11 @@
     "url": "https://github.com/wildsurfer/your-mail-mcp",
     "source": "github"
   },
-  "version": "0.2.0",
+  "version": "0.3.0",
   "packages": [
     {
       "registryType": "oci",
-      "identifier": "ghcr.io/wildsurfer/your-mail-mcp:0.2.0",
+      "identifier": "ghcr.io/wildsurfer/your-mail-mcp:0.3.0",
       "transport": {
         "type": "streamable-http",
         "url": "http://localhost:8080/mcp"
@@ -19,17 +19,31 @@
         {
           "name": "PUBLIC_URL",
           "description": "Public base URL the server is reached at (used for OAuth metadata)",
-          "isRequired": true,
+          "isRequired": false,
           "format": "string",
           "isSecret": false
         },
         {
           "name": "OAUTH_PASSPHRASE",
           "description": "Passphrase gating the OAuth consent step",
-          "isRequired": true,
+          "isRequired": false,
           "format": "string",
           "isSecret": true
         }
+      ]
+    },
+    {
+      "registryType": "oci",
+      "identifier": "ghcr.io/wildsurfer/your-mail-mcp:0.3.0",
+      "transport": { "type": "stdio" },
+      "runtimeHint": "docker",
+      "runtimeArguments": [
+        { "type": "positional", "value": "run" },
+        { "type": "positional", "value": "-i" },
+        { "type": "positional", "value": "--rm" }
+      ],
+      "packageArguments": [
+        { "type": "positional", "value": "stdio" }
       ]
     }
   ]
