@@ -2,11 +2,14 @@ package main
 
 import (
 	"context"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 func writeConfig(t *testing.T, body string) string {
@@ -293,5 +296,39 @@ func TestLoadEnvAcceptsAndAppliesSyncTimeout(t *testing.T) {
 	}
 	if e.SyncTimeout != 30*time.Minute {
 		t.Errorf("SyncTimeout = %v, want 30m", e.SyncTimeout)
+	}
+}
+
+func TestServeSocketAnswersToolsList(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	sock := filepath.Join(t.TempDir(), "mcp.sock")
+	m := mcp.NewServer(&mcp.Implementation{Name: "t", Version: "0"}, nil)
+	newServer(&Config{}, nil, t.TempDir()).registerTools(m)
+	go func() { _ = serveSocket(ctx, sock, m) }()
+	var conn net.Conn
+	var err error
+	for i := 0; i < 50; i++ {
+		if conn, err = net.Dial("unix", sock); err == nil {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if err != nil {
+		t.Fatalf("socket never came up: %v", err)
+	}
+	defer conn.Close()
+	c := mcp.NewClient(&mcp.Implementation{Name: "c", Version: "0"}, nil)
+	sess, err := c.Connect(ctx, &mcp.IOTransport{Reader: conn, Writer: conn}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sess.Close()
+	res, err := sess.ListTools(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Tools) != 11 {
+		t.Fatalf("want 11 tools over the socket, got %d", len(res.Tools))
 	}
 }

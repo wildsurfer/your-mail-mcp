@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -269,6 +270,40 @@ func runTicker(ctx context.Context, every time.Duration, fn func(context.Context
 	}
 }
 
+// serveSocket accepts local MCP sessions on a Unix socket. Each connection is
+// one session on the shared server, so it sees the same tools and the same
+// syncer as HTTP. There is no auth on the socket: reaching it means running
+// a process inside the container, which is the boundary.
+func serveSocket(ctx context.Context, path string, m *mcp.Server) error {
+	_ = os.Remove(path)
+	l, err := net.Listen("unix", path)
+	if err != nil {
+		return err
+	}
+	defer os.Remove(path)
+	go func() {
+		<-ctx.Done()
+		l.Close()
+	}()
+	for {
+		conn, err := l.Accept()
+		if err != nil {
+			if ctx.Err() != nil {
+				return nil
+			}
+			return err
+		}
+		go func() {
+			defer conn.Close()
+			sess, err := m.Connect(ctx, &mcp.IOTransport{Reader: conn, Writer: conn}, nil)
+			if err != nil {
+				return
+			}
+			sess.Wait()
+		}()
+	}
+}
+
 func main() {
 	if err := run(); err != nil {
 		fmt.Fprintln(os.Stderr, "your-mail-mcp:", err)
@@ -347,6 +382,13 @@ func run() error {
 
 	m := mcp.NewServer(&mcp.Implementation{Name: "your-mail-mcp", Version: "0.3.0"}, nil)
 	srv.registerTools(m)
+
+	sock := filepath.Join(e.Index, "mcp.sock")
+	go func() {
+		if err := serveSocket(ctx, sock, m); err != nil {
+			fmt.Fprintln(os.Stderr, "socket:", err)
+		}
+	}()
 
 	if e.PublicURL == "" {
 		fmt.Fprintln(os.Stderr, "PUBLIC_URL unset: no HTTP listener, local sessions only")
