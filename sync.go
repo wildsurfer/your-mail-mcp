@@ -417,9 +417,12 @@ func (s *Syncer) Sync(ctx context.Context, account string) (int, error) {
 func (s *Syncer) syncAccount(ctx context.Context, name string) (string, error) {
 	// mbsync creates mailboxes inside a store, but not the store's own
 	// root, so a first run against a fresh volume fails with "cannot open
-	// store" until this directory exists.
-	if err := os.MkdirAll(filepath.Join(s.maildir, name), 0o700); err != nil {
-		return "", err
+	// store" until the directory exists. The recent channel is a second
+	// store and needs its own.
+	for _, dir := range []string{name, name + "-recent"} {
+		if err := os.MkdirAll(filepath.Join(s.maildir, dir), 0o700); err != nil {
+			return "", err
+		}
 	}
 	accountCtx, cancel := context.WithTimeout(ctx, s.timeout)
 	defer cancel()

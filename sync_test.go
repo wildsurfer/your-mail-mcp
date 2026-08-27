@@ -199,6 +199,21 @@ func TestNotCompleteWhenFullFails(t *testing.T) {
 	}
 }
 
+// TestSyncCreatesBothStoreRoots guards the failure only the live test caught:
+// mbsync creates mailboxes inside a store but never the store's own root, and
+// the recent channel is a second store with a second root.
+func TestSyncCreatesBothStoreRoots(t *testing.T) {
+	s, _ := testSyncer(t)
+	if _, err := s.Sync(context.Background(), "home"); err != nil {
+		t.Fatal(err)
+	}
+	for _, dir := range []string{"home", "home-recent"} {
+		if _, err := os.Stat(filepath.Join(s.maildir, dir)); err != nil {
+			t.Errorf("mbsync store root: %v", err)
+		}
+	}
+}
+
 func testSyncer(t *testing.T) (*Syncer, *[]string) {
 	t.Helper()
 	root := t.TempDir()
