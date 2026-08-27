@@ -529,20 +529,21 @@ started, and the last pass's duration.
 Each account gets two mbsync channels into two local paths. `recent` covers
 INBOX only with `MaxMessages 1000`, so it fetches the newest thousand UIDs
 and ignores the rest: minutes, not weeks. `full` covers every folder. They
-run in that order, sequentially, inside the account's goroutine. notmuch
+run as two mbsync invocations in that order inside the account's goroutine; a
+failure of `recent` is logged and does not stop `full`. notmuch
 merges duplicates by Message-ID, so a message reached by both channels is one
 message in every result. `MaxMessages` expiry touches the near side only and
 `Expunge None` keeps even that from becoming a delete; the four read-only
 directives are unchanged and apply to both channels.
 
 An account is `complete` once its `full` channel has exited 0 without hitting
-`SYNC_TIMEOUT`. Set once, never unset. Progress before that comes from
-mbsync's own counter, the `N: +pulled/total` on its final progress line,
-parsed into `status` per account. No remote count is fetched; the `LIST`-only
-invariant stands.
+`SYNC_TIMEOUT`. Set once, never unset. Progress before that is the account's
+indexed message count, which `status` already reports. mbsync prints its
+pulled/total counter only to a console, and a remote total would need
+`STATUS` or `SELECT`; the `LIST`-only invariant stands.
 
 While any account in a query's scope is not complete, `search`, `count` and
-`ids` prepend one line naming the account and its pulled/total, so the model
+`ids` prepend one line naming the account and its indexed count, so the model
 knows older mail may be missing. This is server text, not mail text, and does
 not pass through `render`.
 

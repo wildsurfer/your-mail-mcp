@@ -66,8 +66,7 @@ func TestGenMbsyncrcHasNoBlankLinesInsideSections(t *testing.T) {
 			inSection = false
 		case strings.HasPrefix(line, "#"):
 		case strings.HasPrefix(line, "IMAPAccount"), strings.HasPrefix(line, "IMAPStore"),
-			strings.HasPrefix(line, "MaildirStore"), strings.HasPrefix(line, "Channel"),
-			strings.HasPrefix(line, "Group"):
+			strings.HasPrefix(line, "MaildirStore"), strings.HasPrefix(line, "Channel"):
 			inSection = true
 		default:
 			if !inSection {
@@ -123,11 +122,16 @@ func TestGenMbsyncrcAddsRecentChannelPerAccount(t *testing.T) {
 		"Channel work-recent\n", "Patterns \"INBOX\"\n", "MaxMessages 1000\n",
 		"MaildirStore work-recent-local\n", "Path /mail/work-recent/\n",
 		"Channel work-full\n",
-		"Group work\nChannels work-recent work-full\n",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("missing %q in:\n%s", want, got)
 		}
+	}
+	// mbsync returns one exit code for a whole Group, which would hide a
+	// succeeding full channel behind a failing recent one; the two channels
+	// run as separate invocations instead, so no Group line exists.
+	if strings.Contains(got, "Group") {
+		t.Fatalf("no Group stanza expected:\n%s", got)
 	}
 	// The read-only guarantee applies to the recent channel too.
 	recent := got[strings.Index(got, "Channel work-recent"):]
@@ -138,38 +142,18 @@ func TestGenMbsyncrcAddsRecentChannelPerAccount(t *testing.T) {
 	}
 }
 
-func TestParseProgress(t *testing.T) {
-	cases := map[string]struct {
-		out    string
-		p, tot int
-		ok     bool
-	}{
-		"final line": {"C: 1/1  B: 14/14  F: +0/0 *0/0 #0/0  N: +123/45000 *0/0 #0/0\n", 123, 45000, true},
-		"multi line": {"C: 0/1\nC: 1/1  B: 3/3  F: +0/0 *0/0 #0/0  N: +7/7 *0/0 #0/0\n", 7, 7, true},
-		"no counter": {"mbsync: error\n", 0, 0, false},
-	}
-	for name, c := range cases {
-		t.Run(name, func(t *testing.T) {
-			p, tot, ok := parseProgress(c.out)
-			if p != c.p || tot != c.tot || ok != c.ok {
-				t.Fatalf("got %d/%d %v, want %d/%d %v", p, tot, ok, c.p, c.tot, c.ok)
-			}
-		})
-	}
-}
-
 func TestCompleteSetOnceFullPassSucceeds(t *testing.T) {
 	s, _ := testSyncer(t)
 	s.runCmd = func(_ context.Context, _ string, args ...string) (string, error) {
-		if args[len(args)-1] == "home" {
-			return "N: +10/10 *0/0 #0/0\n", nil
+		if strings.HasPrefix(args[len(args)-1], "home") {
+			return "", nil
 		}
 		return "", errors.New("down")
 	}
 	_, _ = s.Sync(context.Background(), "")
 	st := s.Status()
-	if !st["home"].Complete || st["home"].Pulled != 10 || st["home"].Total != 10 {
-		t.Fatalf("home should be complete with progress: %+v", st["home"])
+	if !st["home"].Complete {
+		t.Fatalf("home should be complete: %+v", st["home"])
 	}
 	if st["work"].Complete {
 		t.Fatalf("work failed and must not be complete: %+v", st["work"])
@@ -178,6 +162,40 @@ func TestCompleteSetOnceFullPassSucceeds(t *testing.T) {
 	_, _ = s.Sync(context.Background(), "home")
 	if !s.Status()["home"].Complete {
 		t.Fatal("Complete is set once and never unset")
+	}
+}
+
+// TestCompleteWhenRecentFailsButFullSucceeds guards the reason recent and
+// full run as two invocations rather than one mbsync Group: a Group's exit
+// code covers the whole group, so a failing recent channel would have
+// looked exactly like a failing full channel and Complete would never be
+// set for an account whose full mirror actually finished.
+func TestCompleteWhenRecentFailsButFullSucceeds(t *testing.T) {
+	s, _ := testSyncer(t)
+	s.runCmd = func(_ context.Context, _ string, args ...string) (string, error) {
+		if args[len(args)-1] == "home-recent" {
+			return "", errors.New("recent: down")
+		}
+		return "", nil
+	}
+	_, _ = s.Sync(context.Background(), "home")
+	st := s.Status()["home"]
+	if !st.Complete || st.LastError != "" {
+		t.Fatalf("a failed recent channel must not stop the full channel from completing: %+v", st)
+	}
+}
+
+func TestNotCompleteWhenFullFails(t *testing.T) {
+	s, _ := testSyncer(t)
+	s.runCmd = func(_ context.Context, _ string, args ...string) (string, error) {
+		if args[len(args)-1] == "home-full" {
+			return "", errors.New("full: down")
+		}
+		return "", nil
+	}
+	_, _ = s.Sync(context.Background(), "home")
+	if s.Status()["home"].Complete {
+		t.Fatal("a failed full channel must not be marked complete")
 	}
 }
 
@@ -201,7 +219,9 @@ func testSyncer(t *testing.T) (*Syncer, *[]string) {
 		callsMu.Lock()
 		calls = append(calls, args[len(args)-1])
 		callsMu.Unlock()
-		if strings.HasPrefix(args[len(args)-1], "work") {
+		// Only work's full channel fails, so a test can still see work's
+		// recent channel run (and, separately, exercise recent-fails cases).
+		if args[len(args)-1] == "work-full" {
 			return "", errors.New("AUTHENTICATIONFAILED")
 		}
 		return "", nil
@@ -220,8 +240,8 @@ func TestSyncContinuesAfterOneAccountFails(t *testing.T) {
 	if added != 3 {
 		t.Errorf("added = %d, want the reindex result 3", added)
 	}
-	if len(*calls) != 2 {
-		t.Fatalf("mbsync ran %d times, want once per account: %v", len(*calls), *calls)
+	if len(*calls) != 4 {
+		t.Fatalf("mbsync ran %d times, want twice per account (recent, full): %v", len(*calls), *calls)
 	}
 
 	st := s.Status()
@@ -240,8 +260,8 @@ func TestSyncContinuesAfterOneAccountFails(t *testing.T) {
 // context-cancellation error stopped Sync from returning nil, so a pass
 // where every attempted account failed still reported success — refreshTool
 // then told the model "0 new message(s)" for what was really an outage,
-// indistinguishable from a quiet inbox. testSyncer's runCmd fails for any
-// target beginning "work".
+// indistinguishable from a quiet inbox. testSyncer's runCmd fails work's
+// full channel.
 func TestSyncFailsWhenEveryAttemptedAccountFails(t *testing.T) {
 	s, _ := testSyncer(t)
 	if _, err := s.Sync(context.Background(), "work"); err == nil {
@@ -292,8 +312,8 @@ func TestSyncOneAccountIsAllFolders(t *testing.T) {
 	if _, err := s.Sync(context.Background(), "home"); err != nil {
 		t.Fatal(err)
 	}
-	if len(*calls) != 1 || (*calls)[0] != "home" {
-		t.Fatalf("want one mbsync run for the whole account, got %v", *calls)
+	if len(*calls) != 2 || (*calls)[0] != "home-recent" || (*calls)[1] != "home-full" {
+		t.Fatalf("want the recent channel then the full channel for the whole account, got %v", *calls)
 	}
 }
 
@@ -390,7 +410,7 @@ func TestWaitCoversEveryPassInFlight(t *testing.T) {
 	s.runCmd = func(_ context.Context, _ string, args ...string) (string, error) {
 		name := args[len(args)-1]
 		entered <- struct{}{}
-		if name == "work" {
+		if strings.HasPrefix(name, "work") {
 			<-first
 		} else {
 			<-second
@@ -831,8 +851,8 @@ func TestExcludedFoldersUnionsSpecialUseWithKnownNames(t *testing.T) {
 func TestSyncBacksOffAfterConsecutiveFailures(t *testing.T) {
 	s, calls := testSyncer(t)
 
-	// testSyncer's runCmd fails for targets beginning "work". Two scheduled
-	// passes: the first failure retries normally, the second sets a backoff.
+	// testSyncer's runCmd fails work's full channel. Two scheduled passes:
+	// the first failure retries normally, the second sets a backoff.
 	for i := 0; i < 2; i++ {
 		if _, err := s.Sync(context.Background(), ""); err != nil {
 			t.Fatalf("pass %d: %v", i, err)
@@ -844,27 +864,28 @@ func TestSyncBacksOffAfterConsecutiveFailures(t *testing.T) {
 			workRuns++
 		}
 	}
-	if workRuns != 2 {
-		t.Fatalf("work ran %d times in two passes, want 2", workRuns)
+	if workRuns != 4 {
+		t.Fatalf("work ran %d times across two passes' recent and full channels, want 4", workRuns)
 	}
 	if s.Status()["work"].NextRetry.IsZero() {
 		t.Fatal("two consecutive failures set no backoff")
 	}
 
 	// The third scheduled pass skips the backed-off account.
+	before := len(*calls)
 	if _, err := s.Sync(context.Background(), ""); err != nil {
 		t.Fatal(err)
 	}
-	for _, c := range (*calls)[len(*calls)-1:] {
+	for _, c := range (*calls)[before:] {
 		if strings.HasPrefix(c, "work") {
 			t.Fatal("a backed-off account was synced by the scheduled pass")
 		}
 	}
 
 	// A manual refresh of that account ignores the backoff.
-	before := len(*calls)
+	before = len(*calls)
 	_, _ = s.Sync(context.Background(), "work")
-	if len(*calls) != before+1 {
+	if len(*calls) != before+2 {
 		t.Fatal("a manual refresh must bypass backoff")
 	}
 

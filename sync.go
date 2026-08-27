@@ -9,7 +9,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -39,12 +38,8 @@ type AccountStatus struct {
 	StartedAt    time.Time
 	LastDuration time.Duration
 	// Complete is set the first time the full channel exits 0 within
-	// SYNC_TIMEOUT, and never unset. Pulled and Total are mbsync's own
-	// counter from the last pass, so a client can see how far a first
-	// mirror has got without the server issuing any IMAP command.
+	// SYNC_TIMEOUT, and never unset.
 	Complete bool
-	Pulled   int
-	Total    int
 }
 
 // genNotmuchConfig writes the index configuration. mail_root points at the
@@ -161,14 +156,6 @@ func genMbsyncrc(cfg *Config, maildir string) string {
 		b.WriteString("Expunge None\n")
 		b.WriteString("SyncState *\n")
 		b.WriteString("CopyArrivalDate yes\n")
-		// The group runs recent first, then full, on one connection at a
-		// time: mbsync processes group members sequentially. The group is
-		// named after the account, not "-group", so mbsync -c cfg <name>
-		// keeps working unchanged; mbsync does not allow a Group and a
-		// Channel to share a name, which is why the full channel above is
-		// named "-full" instead of bare <name>.
-		b.WriteString("\nGroup " + a.Name + "\n")
-		b.WriteString("Channels " + a.Name + "-recent " + a.Name + "-full\n")
 	}
 	return b.String()
 }
@@ -418,8 +405,15 @@ func (s *Syncer) Sync(ctx context.Context, account string) (int, error) {
 	return added, reindexErr
 }
 
-// syncAccount runs one mbsync for one account under its own deadline, so a
+// syncAccount runs mbsync for one account under its own deadline, so a
 // provider that stops responding mid-sync cannot stall anything but itself.
+//
+// It is two invocations, recent then full, not the single Group of both that
+// an earlier version used: mbsync returns a Group's exit code for the whole
+// group, so a failing recent channel would have hidden a succeeding full
+// channel behind a non-nil error and Complete would never be set. Running
+// them separately means a failed recent channel is just logged; only full's
+// result decides completion.
 func (s *Syncer) syncAccount(ctx context.Context, name string) (string, error) {
 	// mbsync creates mailboxes inside a store, but not the store's own
 	// root, so a first run against a fresh volume fails with "cannot open
@@ -429,7 +423,10 @@ func (s *Syncer) syncAccount(ctx context.Context, name string) (string, error) {
 	}
 	accountCtx, cancel := context.WithTimeout(ctx, s.timeout)
 	defer cancel()
-	out, err := s.runCmd(accountCtx, "mbsync", "-c", s.mbsyncConfig, name)
+	if _, err := s.runCmd(accountCtx, "mbsync", "-c", s.mbsyncConfig, name+"-recent"); err != nil {
+		fmt.Fprintf(os.Stderr, "sync: account %s: recent: %v\n", name, err)
+	}
+	out, err := s.runCmd(accountCtx, "mbsync", "-c", s.mbsyncConfig, name+"-full")
 	if err != nil && accountCtx.Err() != nil && ctx.Err() == nil {
 		// exec kills mbsync when the deadline passes, so what comes back is
 		// an ExitError reading "signal: killed", never the context error.
@@ -496,31 +493,17 @@ func (s *Syncer) checkInitialised() error {
 	return fmt.Errorf("maildir %s is an empty plain directory, not a mount point: refusing to sync, since a path whose volume was never mounted looks exactly like this and would trigger a full re-download. Mount the storage there, or set INIT_MIRROR=1 if it really is meant to be a directory on this filesystem", s.maildir)
 }
 
-// progressLine matches mbsync's per-pass counter: N: +pulled/total is the
-// new-message tally for the near side. It is the only progress figure that
-// needs no IMAP command of our own.
-var progressLine = regexp.MustCompile(`N: \+(\d+)/(\d+)`)
-
-func parseProgress(out string) (pulled, total int, ok bool) {
-	m := progressLine.FindAllStringSubmatch(out, -1)
-	if len(m) == 0 {
-		return 0, 0, false
-	}
-	last := m[len(m)-1]
-	pulled, _ = strconv.Atoi(last[1])
-	total, _ = strconv.Atoi(last[2])
-	return pulled, total, true
-}
-
+// record updates one account's status after a pass. out is unused today
+// beyond what runCmd already folded into err's message; kept in the
+// signature for a later caller that wants it (mbsync only prints its
+// pulled/total counter to a console, so out never carries one here; see
+// the design spec's "Fresh mail first").
 func (s *Syncer) record(account, out string, err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	st := s.status[account]
 	st.Running = false
 	st.LastDuration = time.Since(st.StartedAt)
-	if p, t, ok := parseProgress(out); ok {
-		st.Pulled, st.Total = p, t
-	}
 	if errors.Is(err, context.DeadlineExceeded) {
 		// SYNC_TIMEOUT expired mid-download. That is progress interrupted,
 		// not a refusal: mbsync journals per message, and the next pass
