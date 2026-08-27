@@ -53,6 +53,10 @@ without changing the spec first.
   intends draft composition behind a send gate built as a type — a
   constructor that returns a refusing implementation when sending is off —
   per the spec.
+- **One process, two attach points.** The container runs `serve`: sync,
+  index, a Unix socket for local clients, and HTTP only when `PUBLIC_URL` is
+  set. `stdio` bridges stdin/stdout to that socket, or runs the daemon
+  in-process when no socket exists. Spec section 7.
 - **Build, not adopt.** Every existing email MCP server is a live-IMAP server with
   a send path, which is the opposite of both choices above. See
   `docs/research/email-mcp-landscape.md`.

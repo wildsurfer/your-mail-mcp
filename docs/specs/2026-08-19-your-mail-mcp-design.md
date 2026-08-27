@@ -469,3 +469,95 @@ Build order, each phase independently useful:
 
 The largest risk, the authorization server, lands after the server already works,
 so it never blocks a usable build.
+
+## 7. Amendment, 27 August 2026: stdio, one process, fresh mail first
+
+This section supersedes the build-order note above that stdio is not a shipped
+transport, and the parts of sections 2, 3 and 4 it names. Everything in
+sections 5 and "Invariants" is unchanged.
+
+### One process, two subcommands
+
+The container is the whole system: sync, index and every client interface
+live in one process. `serve` is the daemon. It syncs on the ticker, listens
+on a Unix socket at `INDEX/mcp.sock` for local clients, and opens the HTTP
+listener only when `PUBLIC_URL` is set. Without `PUBLIC_URL` there is no
+listener and no OAuth; with it, `OAUTH_PASSPHRASE` is required as before.
+
+`stdio` is how a local client attaches. If the socket exists, it copies
+stdin and stdout to the socket and nothing else: a bridge, not a server. If
+the socket does not exist, it runs the daemon in-process and serves stdin as
+one more session, exiting on EOF. So `docker exec -i <container>
+your-mail-mcp stdio` attaches to a running stack, and a bare `docker run -i
+<image>` works with no configuration at all. The image's default command is
+`stdio`; compose sets `command: serve`.
+
+Every socket connection is one MCP session on the same server object, so
+stdio and HTTP expose the same tools and share the same syncer. The auth
+boundary for the socket is Docker itself: reaching it means running a process
+inside the container.
+
+A missing or empty accounts file is legal. The server starts, every tool
+answers, and `status` says how to configure accounts. HTTP mode keeps this
+behaviour too.
+
+Local HTTP with OAuth on loopback, README case 1, is retired in favour of
+`stdio`. HTTP exists for remote clients.
+
+### `refresh` is the scheduled pass, pulled forward
+
+`refresh` runs the same full incremental pass the ticker runs, over every
+folder, for one account or all, then reindexes. It waits up to 20 seconds. If
+the pass finishes inside that, it returns the new-message count. If not, it
+returns that a sync is in progress, when it started, and how long the last
+pass took, and hands back. A `refresh` that arrives while a pass is running
+joins it instead of starting another. A successful `refresh` resets the
+ticker so the next scheduled pass lands one interval later. The INBOX-only
+branch is removed; there is one kind of pass.
+
+An account in backoff is skipped by a scheduled pass and by `refresh` with
+no account, and the response names it and its retry time. `refresh` with a
+named account bypasses backoff: a refused attempt costs the provider nothing,
+and a named request means now. A `SYNC_TIMEOUT` expiry is interrupted
+progress, not a refusal, and does not count toward backoff.
+
+`status` gains three fields per account: whether a pass is running, when it
+started, and the last pass's duration.
+
+### Fresh mail first
+
+Each account gets two mbsync channels into two local paths. `recent` covers
+INBOX only with `MaxMessages 1000`, so it fetches the newest thousand UIDs
+and ignores the rest: minutes, not weeks. `full` covers every folder. They
+run in that order, sequentially, inside the account's goroutine. notmuch
+merges duplicates by Message-ID, so a message reached by both channels is one
+message in every result. `MaxMessages` expiry touches the near side only and
+`Expunge None` keeps even that from becoming a delete; the four read-only
+directives are unchanged and apply to both channels.
+
+An account is `complete` once its `full` channel has exited 0 without hitting
+`SYNC_TIMEOUT`. Set once, never unset. Progress before that comes from
+mbsync's own counter, the `N: +pulled/total` on its final progress line,
+parsed into `status` per account. No remote count is fetched; the `LIST`-only
+invariant stands.
+
+While any account in a query's scope is not complete, `search`, `count` and
+`ids` prepend one line naming the account and its pulled/total, so the model
+knows older mail may be missing. This is server text, not mail text, and does
+not pass through `render`.
+
+### Attachments over the socket
+
+A socket session has no HTTP endpoint to sign a link for. An oversized binary
+part is written to `INDEX/attachments/<id>-<part>` with mode 0600, and the
+tool returns the path and the `docker cp` line that fetches it. The bytes
+reach a shell, never the model. When HTTP is also up, the signed link is
+returned as well.
+
+### Verification
+
+The live test gains one case: `docker run -i` of the shipped image with no
+environment answers `tools/list`. That is the property every directory
+checks. The `recent` channel's `MaxMessages` behaviour is read from the
+research notes, not from a run, and the live test must exercise it against a
+real account before release.
