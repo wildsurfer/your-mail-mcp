@@ -312,14 +312,40 @@ func serveSocket(ctx context.Context, path string, m *mcp.Server) error {
 	}
 }
 
+// pickMode maps the command line onto the three ways the binary runs. With
+// no argument it behaves as stdio, so a bare "docker run -i image" speaks
+// MCP on stdin, which is what every client and directory expects.
+func pickMode(args []string, socketExists bool) string {
+	if len(args) > 0 && args[0] == "serve" {
+		return "serve"
+	}
+	if socketExists {
+		return "bridge"
+	}
+	return "stdio-daemon"
+}
+
 func main() {
-	if err := run(); err != nil {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	sock := filepath.Join(os.Getenv("INDEX"), "mcp.sock")
+	_, statErr := os.Stat(sock)
+	var err error
+	switch pickMode(os.Args[1:], statErr == nil) {
+	case "serve":
+		err = run(ctx, false)
+	case "bridge":
+		err = bridge(sock)
+	default:
+		err = run(ctx, true)
+	}
+	if err != nil {
 		fmt.Fprintln(os.Stderr, "your-mail-mcp:", err)
 		os.Exit(1)
 	}
 }
 
-func run() error {
+func run(ctx context.Context, stdio bool) error {
 	e, err := loadEnv()
 	if err != nil {
 		return err
@@ -356,9 +382,6 @@ func run() error {
 	srv.status = syncer.Status
 	srv.syncBusy = syncer.Busy
 	syncer.interval = e.SyncInterval
-
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
 
 	// Config-tier exclusions touch no network, so they are applied inline
 	// before the listener opens. Full discovery needs a live IMAP login per
@@ -397,6 +420,21 @@ func run() error {
 			fmt.Fprintln(os.Stderr, "socket:", err)
 		}
 	}()
+
+	if stdio {
+		// stdin is one more session. When the client closes it, the whole
+		// process goes: a daemon that outlives its client is the orphan bug
+		// every stdio server ships.
+		ctx, cancel := context.WithCancel(ctx)
+		go func() {
+			defer cancel()
+			_ = m.Run(ctx, &mcp.StdioTransport{})
+		}()
+		if e.PublicURL == "" {
+			<-ctx.Done()
+			return nil
+		}
+	}
 
 	if e.PublicURL == "" {
 		fmt.Fprintln(os.Stderr, "PUBLIC_URL unset: no HTTP listener, local sessions only")

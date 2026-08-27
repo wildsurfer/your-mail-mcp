@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"io"
 	"net"
 	"os"
 	"path/filepath"
@@ -343,5 +344,61 @@ func TestServeSocketAnswersToolsList(t *testing.T) {
 	case <-waitDone:
 	case <-time.After(2 * time.Second):
 		t.Fatal("client session Wait did not return within 2s of ctx cancellation")
+	}
+}
+
+func TestBridgeCopiesBothWays(t *testing.T) {
+	sock := filepath.Join(t.TempDir(), "mcp.sock")
+	l, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer l.Close()
+	go func() {
+		c, err := l.Accept()
+		if err != nil {
+			return
+		}
+		defer c.Close()
+		buf := make([]byte, 5)
+		_, _ = io.ReadFull(c, buf)
+		_, _ = c.Write([]byte("echo:" + string(buf)))
+	}()
+	inR, inW := io.Pipe()
+	outR, outW := io.Pipe()
+	done := make(chan error, 1)
+	go func() { done <- bridgeIO(sock, inR, outW) }()
+	_, _ = inW.Write([]byte("hello"))
+	got := make([]byte, 10)
+	if _, err := io.ReadFull(outR, got); err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "echo:hello" {
+		t.Fatalf("got %q", got)
+	}
+	inW.Close()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestDispatchPicksModeFromArgs(t *testing.T) {
+	cases := map[string]struct {
+		args     []string
+		sockUp   bool
+		wantMode string
+	}{
+		"serve":                {[]string{"serve"}, false, "serve"},
+		"stdio, no socket":     {[]string{"stdio"}, false, "stdio-daemon"},
+		"stdio, socket exists": {[]string{"stdio"}, true, "bridge"},
+		"no args, no socket":   {nil, false, "stdio-daemon"},
+		"no args, socket":      {nil, true, "bridge"},
+	}
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			if got := pickMode(c.args, c.sockUp); got != c.wantMode {
+				t.Fatalf("want %s, got %s", c.wantMode, got)
+			}
+		})
 	}
 }
