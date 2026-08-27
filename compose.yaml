@@ -1,6 +1,7 @@
 services:
   your-mail-mcp:
     image: ghcr.io/wildsurfer/your-mail-mcp:latest
+    container_name: your-mail-mcp
     command: serve
     restart: unless-stopped
     ports:

@@ -69,8 +69,9 @@ There is no send, no delete, no move, and no tag. Attachments are listed in
 `show` and `thread` and served read-only by the `attachment` tool, one part
 at a time: images inline up to 5MB, textual parts as marked text, and other
 binaries as a short-lived signed link to `GET /attachment/{id}/{part}`
-(a bearer token works there too). Nothing in the process holds write access
-to any account.
+(a bearer token works there too). Without an HTTP listener, an oversized
+binary is saved under `/index/attachments/` and the tool returns the path to
+`docker cp`. Nothing in the process holds write access to any account.
 
 Eleven tools, all read-only:
 
@@ -84,14 +85,16 @@ Eleven tools, all read-only:
 | `thread` | Show the whole thread containing a message. Excludes junk/trash replies by default; set `include_excluded` to include them. |
 | `text` | Return the plain-text body of one message, converting HTML. |
 | `folders` | List accounts, their folders, index tags, and each account's last sync and last error. |
-| `refresh` | Sync INBOX now and report how many messages arrived. |
+| `refresh` | Sync every folder of one account or all accounts now, then reindex. Waits up to 20 seconds; if the pass is still running it says so. |
 | `status` | Sync health per account: first-sync completion, last sync, messages indexed, errors and backoff. |
 | `attachment` | One attachment or MIME part of a message, by part number from `show`. Images inline, text (JSON and XML included) as a marked block, other binaries as a signed download link. |
 
 `search`, `ids`, `files` and `count` take a notmuch query (`from:`, `to:`,
 `subject:`, `tag:`, `folder:`, `date:2026-01-01..2026-06-30`, combined with
 and/or/not), an optional `account` to scope to one account, and can include
-junk/trash with `include_excluded`.
+junk/trash with `include_excluded`. While an account's mirror is still
+filling, these four tools prepend a note naming the account and how many
+messages are indexed so far.
 
 ## Why not one of the others
 
@@ -182,66 +185,38 @@ accordingly.
 
 ### Case 1 — on your machine, for your machine only
 
-The server binds to loopback. Nothing outside your machine can reach it, so
-there is no TLS to arrange and no hostname to own. Your CLI tools can use it.
-Your smartphone cannot.
-
-Add one line to `.env`:
-
-```bash
-PUBLIC_URL=http://127.0.0.1:8080
-```
-
-Then start it:
+Start the stack without `PUBLIC_URL`. There is no listener, no OAuth and no
+port; local clients attach through Docker.
 
 ```bash
 docker compose up -d
 docker compose logs -f          # watch the first sync
 ```
 
-The first sync populates the maildir and takes a while on a large mailbox. It
-is slower than it could be on purpose, one IMAP command at a time, because
-providers throttle. There is no separate initialization step.
+The first sync populates the maildir, into two directories per account:
+`<name>/` for the full history and `<name>-recent/` for a fast INBOX-only
+pass. Today's INBOX mail is searchable within minutes; the full history
+follows at whatever pace the provider allows, and `status` reports how far it
+has got.
 
 **Claude Code**
 
 ```bash
-claude mcp add --transport http your-mail http://127.0.0.1:8080/mcp
+claude mcp add your-mail -- docker exec -i your-mail-mcp your-mail-mcp stdio
 ```
 
-Then run `/mcp` inside Claude Code, pick `your-mail`, and authenticate. A
-browser opens the consent page, which asks for one thing: your
-`OAUTH_PASSPHRASE`. Until you do this, `claude mcp list` shows
-`Needs authentication`.
+**Claude Desktop, Cursor, Codex, any stdio client**
 
-**Codex**
-
-```bash
-codex mcp add your-mail --url http://127.0.0.1:8080/mcp
-codex mcp login your-mail
+```json
+{ "command": "docker", "args": ["exec", "-i", "your-mail-mcp", "your-mail-mcp", "stdio"] }
 ```
 
-`codex mcp list` shows the auth status. If the tools still do not appear in a
-session after a successful login, that is a known Codex bug where the OAuth
-credentials are obtained and then never used
-([openai/codex#20009](https://github.com/openai/codex/issues/20009)). Use the
-bridge below until it is fixed.
+Each session is a bridge into the running container, so every client sees the
+same index and the same sync. Close the client and the session goes with it.
 
-<details>
-<summary>Fallback for any client whose OAuth support is broken</summary>
+**Without a running stack**
 
-`mcp-remote` does the OAuth dance itself and re-exposes the server over
-stdio, which every MCP client supports:
-
-```toml
-# ~/.codex/config.toml
-[mcp_servers.your-mail]
-command = "npx"
-args = ["-y", "mcp-remote", "http://127.0.0.1:8080/mcp"]
-```
-
-It opens the same consent page on first run and caches the tokens.
-</details>
+`docker run -i --rm -v index:/index -v mail:/mail -v ./accounts.json:/config/accounts.json:ro ghcr.io/wildsurfer/your-mail-mcp` starts a daemon for the life of one session. Fine for a look; use compose for anything you want kept fresh.
 
 ---
 
@@ -554,16 +529,18 @@ An account name must be unique. At least one account is required; an empty
 | `CONFIG` | yes | — | Path to the accounts file. |
 | `MAILDIR` | yes | — | Maildir root; each account gets a subdirectory. |
 | `INDEX` | yes | — | notmuch/Xapian index directory. |
-| `PUBLIC_URL` | yes | — | The external URL the server is reached at, exactly as a client will use it (a trailing slash, if any, is stripped). Used in OAuth metadata and must match what you type into the client. |
-| `OAUTH_PASSPHRASE` | yes | — | The one passphrase that gates the consent screen. |
+| `PUBLIC_URL` | no | — | The external URL the server is reached at, exactly as a client will use it (a trailing slash, if any, is stripped). Used in OAuth metadata and must match what you type into the client. Unset means no HTTP listener and no OAuth: local sessions only, over `stdio`. |
+| `OAUTH_PASSPHRASE` | when `PUBLIC_URL` is set | — | The one passphrase that gates the consent screen. |
 | `SYNC_INTERVAL` | no | `10m` | Full-sync period, as a Go duration (`5m`, `1h`). The default follows Google's recommended IMAP client cadence of 10 minutes. An account that keeps failing is retried at twice this interval, then four times, capped at an hour, so a provider outage or quota lockout is not hammered. |
 | `SYNC_TIMEOUT` | no | `1h` | Per-account deadline for one mbsync run, as a Go duration. A run cut off by the deadline resumes where it stopped on the next pass, so a large first mirror completes in chunks. Think before raising it on a multi-account setup: accounts sync one at a time, so one account stalled on a throttled connection blocks the others for the whole deadline. |
 | `LISTEN_ADDR` | no | `:8080` | Address the HTTP server binds. |
 | `INIT_MIRROR` | no | unset | Set to `1` to sync into an empty directory that is not a mount point. Not needed with compose, where `/mail` is a volume. |
 
 `CONFIG`, `MAILDIR` and `INDEX` are required; the process refuses to start
-without them. `PUBLIC_URL` and `OAUTH_PASSPHRASE` are required by the OAuth
-layer and the process also fails to start without them.
+without them. `PUBLIC_URL` is optional: leave it unset and the process runs
+with no HTTP listener and no OAuth, serving only the `stdio` bridge. Set it,
+and `OAUTH_PASSPHRASE` becomes required too; the OAuth layer fails to start
+without it in that case.
 
 The container image already sets four of these (`Dockerfile`):
 `MAILDIR=/mail`, `INDEX=/index`, `CONFIG=/config/accounts.json`,

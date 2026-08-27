@@ -38,9 +38,10 @@ without changing the spec first.
   returns images as typed MCP content whose schema names them
   attacker-authored, capped at 5MB. Textual parts — text/*, JSON, XML,
   message/rfc822 — pass through `render`; every other binary is served only
-  as a short-lived signed link to `GET /attachment/{id}/{part}` (bearer
-  token also accepted): those bytes go to a shell or a browser, never into
-  model context, so no cap and no `render` apply there.
+  as a short-lived signed link to `GET /attachment/{id}/{part}` (or, with no
+  listener, a file under the index for `docker cp`) (bearer token also
+  accepted): those bytes go to a shell or a browser, never into model
+  context, so no cap and no `render` apply there.
 - **Junk and trash are excluded from search by default**, discovered per account
   through RFC 6154 SPECIAL-USE so it works whatever the folders are named and in
   whatever language.
@@ -82,6 +83,7 @@ without changing the spec first.
 | `notmuch.go` | executing notmuch, query validation, account scoping |
 | `sync.go` | generated configs, mbsync, sync mutex, guards, SPECIAL-USE discovery |
 | `oauth.go` | authorization-server endpoints and the client/token store |
+| `bridge.go` | `stdio` bridge to the daemon socket |
 | `.github/workflows/ci.yaml` | vet, unit and live tests on every PR; multi-arch image to GHCR on main and tags; release binaries on tags |
 | `docs/specs/` | the design spec, which is the binding authority |
 | `docs/reviews/` | what was verified against the real toolchain, and what was not |
@@ -116,7 +118,7 @@ without changing the spec first.
 
 Sync and serving now run against real iCloud and Gmail accounts, so the IMAP
 `LIST` and the mirror are exercised in the field. The gap between that and
-"safe against any real mailbox" is these three:
+"safe against any real mailbox" is these four:
 
 1. Whether SPECIAL-USE discovery picks the *right* junk and trash folders per
    provider. It runs against real Gmail and iCloud now, but nobody has read
@@ -126,3 +128,6 @@ Sync and serving now run against real iCloud and Gmail accounts, so the IMAP
 2. A real connector handshake. The OAuth flow has only been exercised through
    `httptest` and over localhost.
 3. The README quick start, followed literally on a clean machine.
+4. Whether `MaxMessages 1000` on the `recent` channel behaves as the mbsync
+   manual describes against a real provider. The live test cannot reach that
+   boundary.

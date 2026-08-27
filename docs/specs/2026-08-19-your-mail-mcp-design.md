@@ -552,13 +552,16 @@ not pass through `render`.
 A socket session has no HTTP endpoint to sign a link for. An oversized binary
 part is written to `INDEX/attachments/<id>-<part>` with mode 0600, and the
 tool returns the path and the `docker cp` line that fetches it. The bytes
-reach a shell, never the model. When HTTP is also up, the signed link is
-returned as well.
+reach a shell, never the model. When HTTP is up, the signed link is
+returned instead.
 
 ### Verification
 
 The live test gains one case: `docker run -i` of the shipped image with no
 environment answers `tools/list`. That is the property every directory
-checks. The `recent` channel's `MaxMessages` behaviour is read from the
-research notes, not from a run, and the live test must exercise it against a
-real account before release.
+checks. The live test proves the `recent` channel runs against a real IMAP
+server, creates its store, and that its mail is indexed and visible to
+account-scoped queries. It does not exercise the `MaxMessages` cap: its
+server seeds a handful of messages, so a thousand-message boundary cannot be
+reached there. The cap's behaviour rests on the mbsync manual until a real
+account's recent maildir exceeds it.
