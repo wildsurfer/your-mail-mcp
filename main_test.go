@@ -367,7 +367,7 @@ func TestBridgeCopiesBothWays(t *testing.T) {
 	inR, inW := io.Pipe()
 	outR, outW := io.Pipe()
 	done := make(chan error, 1)
-	go func() { done <- bridgeIO(sock, inR, outW) }()
+	go func() { done <- bridgeIO(context.Background(), sock, inR, outW) }()
 	_, _ = inW.Write([]byte("hello"))
 	got := make([]byte, 10)
 	if _, err := io.ReadFull(outR, got); err != nil {
@@ -379,6 +379,71 @@ func TestBridgeCopiesBothWays(t *testing.T) {
 	inW.Close()
 	if err := <-done; err != nil {
 		t.Fatal(err)
+	}
+}
+
+// TestBridgeIOEndsOnContextCancel covers the fix for a Ctrl-C during a
+// bridge session being swallowed: main() registers a signal handler for
+// every mode, which suppresses the runtime's default terminate-on-SIGINT
+// behavior, so bridge must itself react to ctx to let the user break out.
+// Nothing here ever closes the input pipe or writes a reply, so the only
+// thing that can end bridgeIO is the context cancellation.
+func TestBridgeIOEndsOnContextCancel(t *testing.T) {
+	sock := filepath.Join(t.TempDir(), "mcp.sock")
+	l, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer l.Close()
+	go func() {
+		c, err := l.Accept()
+		if err != nil {
+			return
+		}
+		defer c.Close()
+		_, _ = io.Copy(io.Discard, c)
+	}()
+	ctx, cancel := context.WithCancel(context.Background())
+	inR, _ := io.Pipe()
+	outR, outW := io.Pipe()
+	go io.Copy(io.Discard, outR)
+	done := make(chan error, 1)
+	go func() { done <- bridgeIO(ctx, sock, inR, outW) }()
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("bridgeIO returned %v, want nil on ctx cancellation", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("bridgeIO did not return within 2s of ctx cancellation")
+	}
+}
+
+// TestStdioSessionEOFCancelsSharedContext covers the fix for stdio mode not
+// exiting on stdin EOF when PUBLIC_URL is set: run() used to shadow ctx
+// inside the `if stdio` block with its own child context, so the HTTP
+// shutdown goroutine further down (which reads the outer ctx) never saw the
+// stdio session end. startStdioSession is the extracted piece: it must
+// cancel the shared context whenever the session's transport ends, which is
+// exactly what a real "docker run -i" client hitting EOF looks like at the
+// SDK level. There is no listener on PublicURL here (run() itself needs
+// mbsync/notmuch and a real HTTP port to exercise end to end), so this
+// exercises the cancellation wiring directly with an IOTransport standing
+// in for stdin.
+func TestStdioSessionEOFCancelsSharedContext(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	m := mcp.NewServer(&mcp.Implementation{Name: "t", Version: "0"}, nil)
+	inR, inW := io.Pipe()
+	outR, outW := io.Pipe()
+	go io.Copy(io.Discard, outR)
+	startStdioSession(ctx, cancel, m, &mcp.IOTransport{Reader: inR, Writer: outW})
+	inW.Close()
+	select {
+	case <-ctx.Done():
+	case <-time.After(2 * time.Second):
+		t.Fatal("shared ctx was not cancelled within 2s of the stdio transport's input closing")
 	}
 }
 

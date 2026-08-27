@@ -312,6 +312,19 @@ func serveSocket(ctx context.Context, path string, m *mcp.Server) error {
 	}
 }
 
+// startStdioSession runs an MCP session over transport in the background and
+// cancels the shared run() context when the session ends, whatever the
+// reason: transport EOF, a transport error, or ctx being cancelled from
+// elsewhere. That cancellation is what lets a stdio client's disconnect end
+// the whole process, even when PublicURL is set and the HTTP listener would
+// otherwise have kept it running.
+func startStdioSession(ctx context.Context, cancel context.CancelFunc, m *mcp.Server, transport mcp.Transport) {
+	go func() {
+		defer cancel()
+		_ = m.Run(ctx, transport)
+	}()
+}
+
 // pickMode maps the command line onto the three ways the binary runs. With
 // no argument it behaves as stdio, so a bare "docker run -i image" speaks
 // MCP on stdin, which is what every client and directory expects.
@@ -335,7 +348,7 @@ func main() {
 	case "serve":
 		err = run(ctx, false)
 	case "bridge":
-		err = bridge(sock)
+		err = bridge(ctx, sock)
 	default:
 		err = run(ctx, true)
 	}
@@ -346,6 +359,13 @@ func main() {
 }
 
 func run(ctx context.Context, stdio bool) error {
+	// One cancellable context for the whole run, shared by every goroutine
+	// below including, when stdio is true, the HTTP shutdown goroutine
+	// further down: stdin closing must be able to end the process even when
+	// PublicURL is set, not just the local part of it.
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
 	e, err := loadEnv()
 	if err != nil {
 		return err
@@ -424,12 +444,10 @@ func run(ctx context.Context, stdio bool) error {
 	if stdio {
 		// stdin is one more session. When the client closes it, the whole
 		// process goes: a daemon that outlives its client is the orphan bug
-		// every stdio server ships.
-		ctx, cancel := context.WithCancel(ctx)
-		go func() {
-			defer cancel()
-			_ = m.Run(ctx, &mcp.StdioTransport{})
-		}()
+		// every stdio server ships. startStdioSession cancels the shared ctx
+		// above, so this reaches the HTTP shutdown goroutine too when
+		// PublicURL is set, not just the early return right below.
+		startStdioSession(ctx, cancel, m, &mcp.StdioTransport{})
 		if e.PublicURL == "" {
 			<-ctx.Done()
 			return nil
