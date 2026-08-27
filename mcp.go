@@ -320,19 +320,21 @@ func (s *Server) attachmentTool(ctx context.Context, _ *mcp.CallToolRequest, a a
 	// megabytes of context on content no client renders. Without an HTTP
 	// listener there is no URL to sign, so the part is saved for docker cp
 	// instead; otherwise the link is cheap and works wherever a shell or a
-	// browser exists.
+	// browser exists. Both replies quote the part's filename and content
+	// type, which the message's own MIME headers supplied, so they go
+	// through page like every other mail-derived string.
 	if s.publicURL == "" {
 		path, err := s.saveAttachment(a.ID, a.Part, raw)
 		if err != nil {
 			return nil, nil, err
 		}
-		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: fmt.Sprintf(
+		return page(fmt.Sprintf(
 			"Part %d (%s, %s, %d bytes) is binary content, saved for you to fetch rather than returned inline:\n%s\nFrom the host: docker cp your-mail-mcp:%s .",
-			a.Part, ctype, filename, len(raw), path, path)}}}, nil, nil
+			a.Part, ctype, filename, len(raw), path, path), 0, 0), nil, nil
 	}
-	return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: fmt.Sprintf(
+	return page(fmt.Sprintf(
 		"Part %d (%s, %s, %d bytes) is binary content, served by link rather than inline. Download it (link valid %d minutes):\n%s",
-		a.Part, ctype, filename, len(raw), int(attachmentLinkTTL.Minutes()), s.attachmentURL(a.ID, a.Part))}}}, nil, nil
+		a.Part, ctype, filename, len(raw), int(attachmentLinkTTL.Minutes()), s.attachmentURL(a.ID, a.Part)), 0, 0), nil, nil
 }
 
 // saveAttachment writes one binary part where a local client can fetch it
