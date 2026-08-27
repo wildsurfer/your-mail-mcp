@@ -413,6 +413,9 @@ func TestScheduledPassIsBusyWhenEveryAccountIs(t *testing.T) {
 		t.Fatal("Wait returned done while the pass every account was busy with ran on")
 	}
 	close(release)
+	if !s.Wait(context.Background(), time.Second) {
+		t.Fatal("Wait did not return done after the pass finished")
+	}
 }
 
 // TestWaitCoversEveryPassInFlight is finding 3: two passes can overlap on
