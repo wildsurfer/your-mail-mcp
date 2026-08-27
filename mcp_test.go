@@ -400,6 +400,49 @@ func TestQueryResultsCarryIncompleteMirrorNote(t *testing.T) {
 	}
 }
 
+// TestMirrorNoteIsItsOwnContentItem is the other half of the note's
+// contract: it is server text, so it must not travel inside the untrusted
+// block that render builds for the notmuch output. It rides ahead of that
+// block as a content item of its own.
+func TestMirrorNoteIsItsOwnContentItem(t *testing.T) {
+	s := attachmentFixture(t) // one indexed message under work/INBOX
+	s.status = func() map[string]AccountStatus {
+		return map[string]AccountStatus{"work": {Complete: false}}
+	}
+	for name, run := range map[string]func() (*mcp.CallToolResult, any, error){
+		"search": func() (*mcp.CallToolResult, any, error) {
+			return s.searchTool(context.Background(), nil, searchArgs{Query: "*"})
+		},
+		"count": func() (*mcp.CallToolResult, any, error) {
+			return s.countTool(context.Background(), nil, queryArgs{Query: "*"})
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			res, _, err := run()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(res.Content) != 2 {
+				t.Fatalf("want the note and the rendered block, got %d content items", len(res.Content))
+			}
+			note := res.Content[0].(*mcp.TextContent).Text
+			if !strings.HasPrefix(note, "note: ") || !strings.Contains(note, "mirror incomplete") {
+				t.Errorf("first content item is not the note: %q", note)
+			}
+			if strings.Contains(note, untrustedOpen) {
+				t.Errorf("the note is inside the untrusted block: %q", note)
+			}
+			body := res.Content[1].(*mcp.TextContent).Text
+			if !strings.HasPrefix(body, untrustedOpen) {
+				t.Errorf("second content item is not the rendered block: %q", body)
+			}
+			if strings.Contains(body, "mirror incomplete") {
+				t.Errorf("the note is still inside the rendered block: %q", body)
+			}
+		})
+	}
+}
+
 func TestRejectsUnknownPrefix(t *testing.T) {
 	s := testServer(t)
 	if _, _, err := s.searchTool(context.Background(), nil, searchArgs{Query: "sender:alice"}); err == nil {
@@ -453,13 +496,15 @@ func TestUnknownAccountIsRejected(t *testing.T) {
 	}
 }
 
-// resultText extracts the text of a tool result's first content block.
+// resultText extracts the text of a tool result's rendered block, which is
+// its last content item: a mirror note, when there is one, rides ahead of
+// the rendered block as an item of its own.
 func resultText(t *testing.T, res *mcp.CallToolResult) string {
 	t.Helper()
 	if len(res.Content) == 0 {
 		t.Fatal("result has no content")
 	}
-	tc, ok := res.Content[0].(*mcp.TextContent)
+	tc, ok := res.Content[len(res.Content)-1].(*mcp.TextContent)
 	if !ok {
 		t.Fatalf("content is %T, want *mcp.TextContent", res.Content[0])
 	}

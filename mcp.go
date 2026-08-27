@@ -528,10 +528,10 @@ func (s *Server) searchTool(ctx context.Context, _ *mcp.CallToolRequest, a searc
 // mirrorNote names every account in scope whose full mirror has not yet
 // completed, with its indexed message count when notmuch can provide one, so
 // a model reading query results does not mistake a still-filling mirror for
-// a quiet mailbox. Server text, not mail text: it is prepended to output
-// that then goes through page(), never render, and must never carry
-// anything read from a message. Empty when every account in scope is
-// complete.
+// a quiet mailbox. Server text, not mail text: withNote emits it as its own
+// content item ahead of the rendered mail text rather than inside it, so it
+// never passes through render, and it must never carry anything read from a
+// message. Empty when every account in scope is complete.
 func (s *Server) mirrorNote(ctx context.Context, account string) string {
 	if s.status == nil {
 		return ""
@@ -572,7 +572,18 @@ func (s *Server) runQuery(ctx context.Context, a queryArgs, nmArgs ...string) (*
 	if err != nil {
 		return nil, nil, err
 	}
-	return page(s.mirrorNote(ctx, a.Account)+string(out), 0, 0), nil, nil
+	return s.withNote(ctx, a.Account, page(string(out), 0, 0)), nil, nil
+}
+
+// withNote puts the mirror note, when there is one, in front of res as a
+// content item of its own. Keeping it out of the rendered block is what
+// makes it server text: nothing the model reads inside the untrusted markers
+// is the server speaking.
+func (s *Server) withNote(ctx context.Context, account string, res *mcp.CallToolResult) *mcp.CallToolResult {
+	if note := s.mirrorNote(ctx, account); note != "" {
+		res.Content = append([]mcp.Content{&mcp.TextContent{Text: note}}, res.Content...)
+	}
+	return res
 }
 
 func (s *Server) idsTool(ctx context.Context, _ *mcp.CallToolRequest, a queryArgs) (*mcp.CallToolResult, any, error) {
@@ -592,7 +603,7 @@ func (s *Server) countTool(ctx context.Context, _ *mcp.CallToolRequest, a queryA
 	if err != nil {
 		return nil, nil, err
 	}
-	return page(s.mirrorNote(ctx, a.Account)+fmt.Sprintf("%d", n), 0, 0), nil, nil
+	return s.withNote(ctx, a.Account, page(fmt.Sprintf("%d", n), 0, 0)), nil, nil
 }
 
 type idArgs struct {

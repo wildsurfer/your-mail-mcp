@@ -542,10 +542,10 @@ indexed message count, which `status` already reports. mbsync prints its
 pulled/total counter only to a console, and a remote total would need
 `STATUS` or `SELECT`; the `LIST`-only invariant stands.
 
-While any account in a query's scope is not complete, `search`, `count` and
-`ids` prepend one line naming the account and its indexed count, so the model
-knows older mail may be missing. This is server text, not mail text, and does
-not pass through `render`.
+While any account in a query's scope is not complete, `search`, `count`,
+`ids` and `files` prepend one line naming the account and its indexed
+count, so the model knows older mail may be missing. This is server text,
+not mail text, and does not pass through `render`.
 
 ### Attachments over the socket
 
