@@ -479,9 +479,9 @@ func TestRefreshPassOutlivesTheToolCall(t *testing.T) {
 	// Written by the per-account goroutine, read after Sync's wg.Wait.
 	var ran bool
 	var passErr error
-	s.runCmd = func(ctx context.Context, _ string, _ ...string) error {
+	s.runCmd = func(ctx context.Context, _ string, _ ...string) (string, error) {
 		ran, passErr = true, ctx.Err()
-		return nil
+		return "", nil
 	}
 
 	request, cancel := context.WithCancel(context.Background())

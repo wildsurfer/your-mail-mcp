@@ -22,9 +22,10 @@ func TestGenMbsyncrcIsPullOnlyForEveryAccount(t *testing.T) {
 	}}
 	out := genMbsyncrc(cfg, "/mail")
 
+	// Once per channel, two channels per account.
 	for _, directive := range []string{"Sync Pull", "Create Near", "Remove None", "Expunge None"} {
-		if got := strings.Count(out, directive); got != 2 {
-			t.Errorf("%q appears %d times, want once per account (2)", directive, got)
+		if got := strings.Count(out, directive); got != 2*len(cfg.Accounts) {
+			t.Errorf("%q appears %d times, want once per channel, two channels per account (%d)", directive, got, 2*len(cfg.Accounts))
 		}
 	}
 	if !strings.Contains(out, "PipelineDepth 1") {
@@ -65,7 +66,8 @@ func TestGenMbsyncrcHasNoBlankLinesInsideSections(t *testing.T) {
 			inSection = false
 		case strings.HasPrefix(line, "#"):
 		case strings.HasPrefix(line, "IMAPAccount"), strings.HasPrefix(line, "IMAPStore"),
-			strings.HasPrefix(line, "MaildirStore"), strings.HasPrefix(line, "Channel"):
+			strings.HasPrefix(line, "MaildirStore"), strings.HasPrefix(line, "Channel"),
+			strings.HasPrefix(line, "Group"):
 			inSection = true
 		default:
 			if !inSection {
@@ -114,6 +116,71 @@ func TestGenMbsyncrcQuotesNegationPattern(t *testing.T) {
 	}
 }
 
+func TestGenMbsyncrcAddsRecentChannelPerAccount(t *testing.T) {
+	cfg := &Config{Accounts: []Account{{Name: "work", Host: "h", User: "u", Password: "p"}}}
+	got := genMbsyncrc(cfg, "/mail")
+	for _, want := range []string{
+		"Channel work-recent\n", "Patterns \"INBOX\"\n", "MaxMessages 1000\n",
+		"MaildirStore work-recent-local\n", "Path /mail/work-recent/\n",
+		"Channel work-full\n",
+		"Group work\nChannels work-recent work-full\n",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing %q in:\n%s", want, got)
+		}
+	}
+	// The read-only guarantee applies to the recent channel too.
+	recent := got[strings.Index(got, "Channel work-recent"):]
+	for _, d := range []string{"Sync Pull\n", "Create Near\n", "Remove None\n", "Expunge None\n"} {
+		if !strings.Contains(recent, d) {
+			t.Fatalf("recent channel lacks %q", d)
+		}
+	}
+}
+
+func TestParseProgress(t *testing.T) {
+	cases := map[string]struct {
+		out    string
+		p, tot int
+		ok     bool
+	}{
+		"final line": {"C: 1/1  B: 14/14  F: +0/0 *0/0 #0/0  N: +123/45000 *0/0 #0/0\n", 123, 45000, true},
+		"multi line": {"C: 0/1\nC: 1/1  B: 3/3  F: +0/0 *0/0 #0/0  N: +7/7 *0/0 #0/0\n", 7, 7, true},
+		"no counter": {"mbsync: error\n", 0, 0, false},
+	}
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			p, tot, ok := parseProgress(c.out)
+			if p != c.p || tot != c.tot || ok != c.ok {
+				t.Fatalf("got %d/%d %v, want %d/%d %v", p, tot, ok, c.p, c.tot, c.ok)
+			}
+		})
+	}
+}
+
+func TestCompleteSetOnceFullPassSucceeds(t *testing.T) {
+	s, _ := testSyncer(t)
+	s.runCmd = func(_ context.Context, _ string, args ...string) (string, error) {
+		if args[len(args)-1] == "home" {
+			return "N: +10/10 *0/0 #0/0\n", nil
+		}
+		return "", errors.New("down")
+	}
+	_, _ = s.Sync(context.Background(), "")
+	st := s.Status()
+	if !st["home"].Complete || st["home"].Pulled != 10 || st["home"].Total != 10 {
+		t.Fatalf("home should be complete with progress: %+v", st["home"])
+	}
+	if st["work"].Complete {
+		t.Fatalf("work failed and must not be complete: %+v", st["work"])
+	}
+	s.runCmd = func(context.Context, string, ...string) (string, error) { return "", context.DeadlineExceeded }
+	_, _ = s.Sync(context.Background(), "home")
+	if !s.Status()["home"].Complete {
+		t.Fatal("Complete is set once and never unset")
+	}
+}
+
 func testSyncer(t *testing.T) (*Syncer, *[]string) {
 	t.Helper()
 	root := t.TempDir()
@@ -130,14 +197,14 @@ func testSyncer(t *testing.T) (*Syncer, *[]string) {
 	s := newSyncer(cfg, maildir, index, "/tmp/mbsyncrc", nil)
 	var calls []string
 	var callsMu sync.Mutex
-	s.runCmd = func(_ context.Context, _ string, args ...string) error {
+	s.runCmd = func(_ context.Context, _ string, args ...string) (string, error) {
 		callsMu.Lock()
 		calls = append(calls, args[len(args)-1])
 		callsMu.Unlock()
 		if strings.HasPrefix(args[len(args)-1], "work") {
-			return errors.New("AUTHENTICATIONFAILED")
+			return "", errors.New("AUTHENTICATIONFAILED")
 		}
-		return nil
+		return "", nil
 	}
 	s.reindex = func(context.Context) (int, error) { return 3, nil }
 	return s, &calls
@@ -209,7 +276,9 @@ func TestSyncStillReindexesWhenEveryAccountFails(t *testing.T) {
 	}
 
 	s := newSyncer(&Config{Accounts: []Account{{Name: "acct"}}}, maildir, index, "/tmp/none", newNotmuch(config))
-	s.runCmd = func(context.Context, string, ...string) error { return errors.New("AUTHENTICATIONFAILED") }
+	s.runCmd = func(context.Context, string, ...string) (string, error) {
+		return "", errors.New("AUTHENTICATIONFAILED")
+	}
 	if _, err := s.Sync(context.Background(), ""); err == nil {
 		t.Fatal("want an error: the only account failed")
 	}
@@ -232,10 +301,10 @@ func TestSyncWaitJoinsRunningPass(t *testing.T) {
 	s, _ := testSyncer(t)
 	release := make(chan struct{})
 	entered := make(chan struct{}, 1)
-	s.runCmd = func(context.Context, string, ...string) error {
+	s.runCmd = func(context.Context, string, ...string) (string, error) {
 		entered <- struct{}{}
 		<-release
-		return nil
+		return "", nil
 	}
 	go func() { _, _ = s.Sync(context.Background(), "home") }()
 	<-entered
@@ -264,10 +333,10 @@ func TestWaitOutlivesARefusedConcurrentSync(t *testing.T) {
 	s, _ := testSyncer(t)
 	release, entered := make(chan struct{}), make(chan struct{})
 	var once sync.Once
-	s.runCmd = func(context.Context, string, ...string) error {
+	s.runCmd = func(context.Context, string, ...string) (string, error) {
 		once.Do(func() { close(entered) })
 		<-release
-		return nil
+		return "", nil
 	}
 	go func() { _, _ = s.Sync(context.Background(), "home") }()
 	<-entered
@@ -293,10 +362,10 @@ func TestScheduledPassIsBusyWhenEveryAccountIs(t *testing.T) {
 	release := make(chan struct{})
 	// Both accounts, so the second pass finds every lock taken.
 	entered := make(chan struct{}, 2)
-	s.runCmd = func(context.Context, string, ...string) error {
+	s.runCmd = func(context.Context, string, ...string) (string, error) {
 		entered <- struct{}{}
 		<-release
-		return nil
+		return "", nil
 	}
 	go func() { _, _ = s.Sync(context.Background(), "") }()
 	<-entered
@@ -318,7 +387,7 @@ func TestWaitCoversEveryPassInFlight(t *testing.T) {
 	s, _ := testSyncer(t)
 	first, second := make(chan struct{}), make(chan struct{})
 	entered := make(chan struct{}, 2)
-	s.runCmd = func(_ context.Context, _ string, args ...string) error {
+	s.runCmd = func(_ context.Context, _ string, args ...string) (string, error) {
 		name := args[len(args)-1]
 		entered <- struct{}{}
 		if name == "work" {
@@ -326,7 +395,7 @@ func TestWaitCoversEveryPassInFlight(t *testing.T) {
 		} else {
 			<-second
 		}
-		return nil
+		return "", nil
 	}
 	go func() { _, _ = s.Sync(context.Background(), "work") }()
 	<-entered
@@ -346,11 +415,11 @@ func TestWaitCoversEveryPassInFlight(t *testing.T) {
 func TestDeadlineIsNotAFailure(t *testing.T) {
 	s, _ := testSyncer(t)
 	s.timeout = 20 * time.Millisecond
-	s.runCmd = func(ctx context.Context, _ string, _ ...string) error {
+	s.runCmd = func(ctx context.Context, _ string, _ ...string) (string, error) {
 		<-ctx.Done()
 		// What exec.CommandContext actually returns when it kills mbsync on
 		// the deadline. Not the sentinel, which is the whole point.
-		return errors.New("mbsync: signal: killed")
+		return "", errors.New("mbsync: signal: killed")
 	}
 	for i := 0; i < 3; i++ {
 		_, _ = s.Sync(context.Background(), "home")
@@ -365,12 +434,12 @@ func TestSyncIsSerialisedPerAccount(t *testing.T) {
 	release := make(chan struct{})
 	entered := make(chan struct{})
 	var once sync.Once
-	s.runCmd = func(_ context.Context, _ string, args ...string) error {
+	s.runCmd = func(_ context.Context, _ string, args ...string) (string, error) {
 		if strings.HasPrefix(args[len(args)-1], "home") {
 			once.Do(func() { close(entered) })
 			<-release
 		}
-		return nil
+		return "", nil
 	}
 	var wg sync.WaitGroup
 	wg.Add(1)
@@ -700,7 +769,7 @@ func TestReindexSurvivesAMissingDatabase(t *testing.T) {
 	}
 
 	s := newSyncer(&Config{Accounts: []Account{{Name: "acct"}}}, maildir, index, "/tmp/none", newNotmuch(config))
-	s.runCmd = func(context.Context, string, ...string) error { return nil }
+	s.runCmd = func(context.Context, string, ...string) (string, error) { return "", nil }
 	if _, err := s.Sync(context.Background(), ""); err != nil {
 		t.Fatalf("first sync against an empty index failed: %v", err)
 	}

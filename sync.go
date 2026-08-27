@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -37,6 +38,13 @@ type AccountStatus struct {
 	Running      bool
 	StartedAt    time.Time
 	LastDuration time.Duration
+	// Complete is set the first time the full channel exits 0 within
+	// SYNC_TIMEOUT, and never unset. Pulled and Total are mbsync's own
+	// counter from the last pass, so a client can see how far a first
+	// mirror has got without the server issuing any IMAP command.
+	Complete bool
+	Pulled   int
+	Total    int
 }
 
 // genNotmuchConfig writes the index configuration. mail_root points at the
@@ -114,7 +122,7 @@ func genMbsyncrc(cfg *Config, maildir string) string {
 		// server's delimiter itself.
 		b.WriteString("SubFolders Verbatim\n")
 
-		b.WriteString("\nChannel " + a.Name + "\n")
+		b.WriteString("\nChannel " + a.Name + "-full\n")
 		b.WriteString("Far :" + a.Name + "-remote:\n")
 		b.WriteString("Near :" + a.Name + "-local:\n")
 		pats := make([]string, len(a.Patterns))
@@ -129,6 +137,38 @@ func genMbsyncrc(cfg *Config, maildir string) string {
 		b.WriteString("Expunge None\n")
 		b.WriteString("SyncState *\n")
 		b.WriteString("CopyArrivalDate yes\n")
+
+		// A second, small channel so today's mail is searchable within
+		// minutes of a first run, while the full mirror takes as long as
+		// the provider's quota allows. MaxMessages fetches only the newest
+		// UIDs and ignores the rest; notmuch merges the overlap by
+		// Message-ID once the full channel catches up. Expiry under
+		// MaxMessages is near-side only and Expunge None keeps even that
+		// from deleting a file.
+		recentLocal := filepath.Join(maildir, a.Name+"-recent") + string(filepath.Separator)
+		b.WriteString("\nMaildirStore " + a.Name + "-recent-local\n")
+		b.WriteString("Path " + recentLocal + "\n")
+		b.WriteString("Inbox " + filepath.Join(recentLocal, "INBOX") + "\n")
+		b.WriteString("SubFolders Verbatim\n")
+		b.WriteString("\nChannel " + a.Name + "-recent\n")
+		b.WriteString("Far :" + a.Name + "-remote:\n")
+		b.WriteString("Near :" + a.Name + "-recent-local:\n")
+		b.WriteString("Patterns \"INBOX\"\n")
+		b.WriteString("MaxMessages 1000\n")
+		b.WriteString("Sync Pull\n")
+		b.WriteString("Create Near\n")
+		b.WriteString("Remove None\n")
+		b.WriteString("Expunge None\n")
+		b.WriteString("SyncState *\n")
+		b.WriteString("CopyArrivalDate yes\n")
+		// The group runs recent first, then full, on one connection at a
+		// time: mbsync processes group members sequentially. The group is
+		// named after the account, not "-group", so mbsync -c cfg <name>
+		// keeps working unchanged; mbsync does not allow a Group and a
+		// Channel to share a name, which is why the full channel above is
+		// named "-full" instead of bare <name>.
+		b.WriteString("\nGroup " + a.Name + "\n")
+		b.WriteString("Channels " + a.Name + "-recent " + a.Name + "-full\n")
 	}
 	return b.String()
 }
@@ -187,7 +227,7 @@ type Syncer struct {
 	// the normal cadence, capped at an hour, instead of hammered every tick.
 	interval time.Duration
 
-	runCmd  func(ctx context.Context, name string, args ...string) error
+	runCmd  func(ctx context.Context, name string, args ...string) (string, error)
 	reindex func(ctx context.Context) (int, error)
 	// mountPoint defaults to the package-level isMountPoint; overridden in
 	// tests, since a real mount point is not reproducible in one.
@@ -227,13 +267,13 @@ func newSyncer(cfg *Config, maildir, index, mbsyncConfig string, nm *Notmuch) *S
 		kick:         make(chan struct{}, 1),
 		mountPoint:   isMountPoint,
 		status:       map[string]AccountStatus{},
-		runCmd: func(ctx context.Context, name string, args ...string) error {
+		runCmd: func(ctx context.Context, name string, args ...string) (string, error) {
 			cmd := exec.CommandContext(ctx, name, args...)
 			out, err := cmd.CombinedOutput()
 			if err != nil {
-				return fmt.Errorf("%s: %w: %s", name, err, strings.TrimSpace(string(out)))
+				return string(out), fmt.Errorf("%s: %w: %s", name, err, strings.TrimSpace(string(out)))
 			}
-			return nil
+			return string(out), nil
 		},
 		reindex: func(ctx context.Context) (int, error) {
 			// A missing database is the normal state on a first run: notmuch
@@ -332,8 +372,8 @@ func (s *Syncer) Sync(ctx context.Context, account string) (int, error) {
 			st.Running, st.StartedAt = true, time.Now()
 			s.status[a.Name] = st
 			s.mu.Unlock()
-			err := s.syncAccount(ctx, a.Name)
-			s.record(a.Name, err)
+			out, err := s.syncAccount(ctx, a.Name)
+			s.record(a.Name, out, err)
 			resMu.Lock()
 			defer resMu.Unlock()
 			attempted++
@@ -380,24 +420,24 @@ func (s *Syncer) Sync(ctx context.Context, account string) (int, error) {
 
 // syncAccount runs one mbsync for one account under its own deadline, so a
 // provider that stops responding mid-sync cannot stall anything but itself.
-func (s *Syncer) syncAccount(ctx context.Context, name string) error {
+func (s *Syncer) syncAccount(ctx context.Context, name string) (string, error) {
 	// mbsync creates mailboxes inside a store, but not the store's own
 	// root, so a first run against a fresh volume fails with "cannot open
 	// store" until this directory exists.
 	if err := os.MkdirAll(filepath.Join(s.maildir, name), 0o700); err != nil {
-		return err
+		return "", err
 	}
 	accountCtx, cancel := context.WithTimeout(ctx, s.timeout)
 	defer cancel()
-	err := s.runCmd(accountCtx, "mbsync", "-c", s.mbsyncConfig, name)
+	out, err := s.runCmd(accountCtx, "mbsync", "-c", s.mbsyncConfig, name)
 	if err != nil && accountCtx.Err() != nil && ctx.Err() == nil {
 		// exec kills mbsync when the deadline passes, so what comes back is
 		// an ExitError reading "signal: killed", never the context error.
 		// Translate it, or record cannot tell an interrupted download from
 		// a provider refusing, and backs off a mirror that was working.
-		return fmt.Errorf("sync deadline %s reached: %w", s.timeout, context.DeadlineExceeded)
+		return out, fmt.Errorf("sync deadline %s reached: %w", s.timeout, context.DeadlineExceeded)
 	}
-	return err
+	return out, err
 }
 
 // markMirrored records, in the index directory, that a mirror exists at
@@ -456,12 +496,31 @@ func (s *Syncer) checkInitialised() error {
 	return fmt.Errorf("maildir %s is an empty plain directory, not a mount point: refusing to sync, since a path whose volume was never mounted looks exactly like this and would trigger a full re-download. Mount the storage there, or set INIT_MIRROR=1 if it really is meant to be a directory on this filesystem", s.maildir)
 }
 
-func (s *Syncer) record(account string, err error) {
+// progressLine matches mbsync's per-pass counter: N: +pulled/total is the
+// new-message tally for the near side. It is the only progress figure that
+// needs no IMAP command of our own.
+var progressLine = regexp.MustCompile(`N: \+(\d+)/(\d+)`)
+
+func parseProgress(out string) (pulled, total int, ok bool) {
+	m := progressLine.FindAllStringSubmatch(out, -1)
+	if len(m) == 0 {
+		return 0, 0, false
+	}
+	last := m[len(m)-1]
+	pulled, _ = strconv.Atoi(last[1])
+	total, _ = strconv.Atoi(last[2])
+	return pulled, total, true
+}
+
+func (s *Syncer) record(account, out string, err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	st := s.status[account]
 	st.Running = false
 	st.LastDuration = time.Since(st.StartedAt)
+	if p, t, ok := parseProgress(out); ok {
+		st.Pulled, st.Total = p, t
+	}
 	if errors.Is(err, context.DeadlineExceeded) {
 		// SYNC_TIMEOUT expired mid-download. That is progress interrupted,
 		// not a refusal: mbsync journals per message, and the next pass
@@ -492,6 +551,7 @@ func (s *Syncer) record(account string, err error) {
 		st.LastSync = time.Now()
 		st.Failures = 0
 		st.NextRetry = time.Time{}
+		st.Complete = true
 	}
 	s.status[account] = st
 }
