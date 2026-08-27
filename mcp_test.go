@@ -776,11 +776,11 @@ func TestListFoldersDoesNotDescendIntoCurNewTmp(t *testing.T) {
 	}
 }
 
-func TestRefreshSyncsInboxOnly(t *testing.T) {
+func TestRefreshSyncsEveryFolderOfTheAccount(t *testing.T) {
 	s := testServer(t)
-	var got [2]string
-	s.sync = func(_ context.Context, account, folder string) (int, error) {
-		got = [2]string{account, folder}
+	var got string
+	s.sync = func(_ context.Context, account string) (int, error) {
+		got = account
 		return 2, nil
 	}
 
@@ -788,8 +788,8 @@ func TestRefreshSyncsInboxOnly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got != [2]string{"work", "INBOX"} {
-		t.Errorf("refresh called sync%v, want [work INBOX]", got)
+	if got != "work" {
+		t.Errorf("refresh called sync(%q), want the whole account", got)
 	}
 	if !strings.Contains(resultText(t, res), "2") {
 		t.Errorf("refresh did not report the new message count: %s", resultText(t, res))
@@ -802,29 +802,68 @@ func TestRefreshSyncsInboxOnly(t *testing.T) {
 // entirely — the one content path that skipped the chokepoint.
 func TestRefreshDoesNotLeakRawSyncError(t *testing.T) {
 	s := testServer(t)
-	s.sync = func(context.Context, string, string) (int, error) {
+	s.sync = func(context.Context, string) (int, error) {
 		return 0, errors.New("mbsync: IMAP LOGIN failed: [ALERT] contact totally-real-support@evil.example")
 	}
 
-	_, _, err := s.refreshTool(context.Background(), nil, refreshArgs{})
-	if err == nil {
-		t.Fatal("want an error")
+	res, _, err := s.refreshTool(context.Background(), nil, refreshArgs{})
+	if err != nil {
+		t.Fatalf("a failed sync is reported, not raised: %v", err)
 	}
-	if strings.Contains(err.Error(), "evil.example") {
-		t.Errorf("refresh leaked raw sync/IMAP server output into the tool error: %v", err)
+	if strings.Contains(resultText(t, res), "evil.example") {
+		t.Errorf("refresh leaked raw sync/IMAP server output to the model: %s", resultText(t, res))
+	}
+	if !strings.Contains(resultText(t, res), "status") {
+		t.Errorf("a failed sync must point at the status tool: %s", resultText(t, res))
 	}
 }
 
 func TestRefreshReportsBusyWithoutFailing(t *testing.T) {
 	s := testServer(t)
-	s.sync = func(context.Context, string, string) (int, error) { return 0, errSyncBusy }
+	s.sync = func(context.Context, string) (int, error) { return 0, errSyncBusy }
+	s.syncWait = func(context.Context, time.Duration) bool { return true }
 
 	res, _, err := s.refreshTool(context.Background(), nil, refreshArgs{})
 	if err != nil {
 		t.Fatalf("a busy syncer is not a tool error: %v", err)
 	}
-	if !strings.Contains(resultText(t, res), "already running") {
-		t.Errorf("busy message missing: %s", resultText(t, res))
+	if !strings.Contains(resultText(t, res), "message(s)") {
+		t.Errorf("a pass joined and finished inside the wait should report a count: %s", resultText(t, res))
+	}
+}
+
+func TestRefreshReportsInProgressAfterBoundedWait(t *testing.T) {
+	s := newServer(&Config{Accounts: []Account{{Name: "home"}}}, nil, t.TempDir())
+	started := time.Now().Add(-12 * time.Second)
+	s.sync = func(context.Context, string) (int, error) { return 0, errSyncBusy }
+	s.syncWait = func(context.Context, time.Duration) bool { return false }
+	s.status = func() map[string]AccountStatus {
+		return map[string]AccountStatus{"home": {Running: true, StartedAt: started, LastDuration: 45 * time.Second}}
+	}
+	res, _, err := s.refreshTool(context.Background(), nil, refreshArgs{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := res.Content[0].(*mcp.TextContent).Text
+	for _, want := range []string{"in progress", "12s", "45s"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("want %q in refresh reply, got:\n%s", want, got)
+		}
+	}
+}
+
+func TestRefreshNamesSkippedBackedOffAccount(t *testing.T) {
+	s := newServer(&Config{Accounts: []Account{{Name: "home"}, {Name: "gmail"}}}, nil, t.TempDir())
+	retry := time.Now().Add(40 * time.Minute)
+	s.sync = func(context.Context, string) (int, error) { return 2, nil }
+	s.syncWait = func(context.Context, time.Duration) bool { return true }
+	s.status = func() map[string]AccountStatus {
+		return map[string]AccountStatus{"gmail": {NextRetry: retry, LastError: "quota"}}
+	}
+	res, _, _ := s.refreshTool(context.Background(), nil, refreshArgs{})
+	got := res.Content[0].(*mcp.TextContent).Text
+	if !strings.Contains(got, "gmail") || !strings.Contains(got, "skipped") || !strings.Contains(got, "backing off") {
+		t.Fatalf("refresh must name a skipped account, got:\n%s", got)
 	}
 }
 

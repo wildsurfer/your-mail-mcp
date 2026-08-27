@@ -467,3 +467,32 @@ func TestDispatchPicksModeFromArgs(t *testing.T) {
 		})
 	}
 }
+
+// TestRefreshPassOutlivesTheToolCall covers the context the refresh tool's
+// pass runs under. The MCP SDK cancels a tool handler's context as soon as
+// the handler returns, and refresh returns after refreshWait while the pass
+// keeps going, so a pass wired to the request context would have its mbsync
+// killed mid-download every time refresh reported "in progress".
+func TestRefreshPassOutlivesTheToolCall(t *testing.T) {
+	s, _ := testSyncer(t)
+	// Whether mbsync's own context was still live when it was about to run.
+	// Written by the per-account goroutine, read after Sync's wg.Wait.
+	var ran bool
+	var passErr error
+	s.runCmd = func(ctx context.Context, _ string, _ ...string) error {
+		ran, passErr = true, ctx.Err()
+		return nil
+	}
+
+	request, cancel := context.WithCancel(context.Background())
+	cancel() // what the SDK does the moment the handler returns
+	if _, err := detachedSync(context.Background(), s)(request, "home"); err != nil {
+		t.Fatal(err)
+	}
+	if !ran {
+		t.Fatal("the pass never ran")
+	}
+	if passErr != nil {
+		t.Fatalf("mbsync ran under the cancelled tool-call context: %v", passErr)
+	}
+}

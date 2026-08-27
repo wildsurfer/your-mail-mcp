@@ -270,6 +270,18 @@ func runTicker(ctx context.Context, every time.Duration, fn func(context.Context
 	}
 }
 
+// detachedSync returns the entry point the refresh tool calls to start a
+// pass. The pass outlives the tool call that asked for it, since refresh
+// waits refreshWait and then reports that it is still running, so it runs
+// under base, the process context, and ignores the request context it is
+// handed. The SDK cancels a handler's context the moment the handler
+// returns, and mbsync runs under that context, so without this every refresh
+// that reported "in progress" would kill the download it had just started.
+// Shutdown still stops it: base is cancelled with the process.
+func detachedSync(base context.Context, s *Syncer) func(context.Context, string) (int, error) {
+	return func(_ context.Context, account string) (int, error) { return s.Sync(base, account) }
+}
+
 // serveSocket accepts local MCP sessions on a Unix socket. Each connection is
 // one session on the shared server, so it sees the same tools and the same
 // syncer as HTTP. There is no auth on the socket: reaching it means running
@@ -398,7 +410,9 @@ func run(ctx context.Context, stdio bool) error {
 
 	srv := newServer(cfg, nm, e.Maildir)
 	srv.publicURL = strings.TrimSuffix(e.PublicURL, "/")
-	srv.sync = syncer.Sync
+	srv.sync = detachedSync(ctx, syncer)
+	srv.syncWait = syncer.Wait
+	srv.syncKick = syncer.Kick
 	srv.status = syncer.Status
 	srv.syncBusy = syncer.Busy
 	syncer.interval = e.SyncInterval
@@ -419,7 +433,7 @@ func run(ctx context.Context, stdio bool) error {
 	})
 
 	sync := func(ctx context.Context) {
-		if _, err := syncer.Sync(ctx, "", ""); err != nil && !errors.Is(err, errSyncBusy) {
+		if _, err := syncer.Sync(ctx, ""); err != nil && !errors.Is(err, errSyncBusy) {
 			fmt.Fprintln(os.Stderr, "sync:", err)
 		}
 	}
@@ -429,7 +443,22 @@ func run(ctx context.Context, stdio bool) error {
 	// goroutine because a first mirror of a large mailbox takes far longer
 	// than the listener should wait to open.
 	go sync(ctx)
-	go runTicker(ctx, e.SyncInterval, sync)
+	// Not runTicker: a manual refresh resets the schedule, so that a pass
+	// asked for by hand is not followed by a scheduled one moments later.
+	go func() {
+		t := time.NewTicker(e.SyncInterval)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-syncer.kick:
+				t.Reset(e.SyncInterval)
+			case <-t.C:
+				sync(ctx)
+			}
+		}
+	}()
 
 	m := mcp.NewServer(&mcp.Implementation{Name: "your-mail-mcp", Version: "0.3.0"}, nil)
 	srv.registerTools(m)

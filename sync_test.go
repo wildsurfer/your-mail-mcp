@@ -146,7 +146,7 @@ func testSyncer(t *testing.T) (*Syncer, *[]string) {
 func TestSyncContinuesAfterOneAccountFails(t *testing.T) {
 	s, calls := testSyncer(t)
 
-	added, err := s.Sync(context.Background(), "", "")
+	added, err := s.Sync(context.Background(), "")
 	if err != nil {
 		t.Fatalf("a failing account must not fail the pass: %v", err)
 	}
@@ -177,7 +177,7 @@ func TestSyncContinuesAfterOneAccountFails(t *testing.T) {
 // target beginning "work".
 func TestSyncFailsWhenEveryAttemptedAccountFails(t *testing.T) {
 	s, _ := testSyncer(t)
-	if _, err := s.Sync(context.Background(), "work", ""); err == nil {
+	if _, err := s.Sync(context.Background(), "work"); err == nil {
 		t.Fatal("want an error when the only attempted account fails")
 	}
 }
@@ -210,7 +210,7 @@ func TestSyncStillReindexesWhenEveryAccountFails(t *testing.T) {
 
 	s := newSyncer(&Config{Accounts: []Account{{Name: "acct"}}}, maildir, index, "/tmp/none", newNotmuch(config))
 	s.runCmd = func(context.Context, string, ...string) error { return errors.New("AUTHENTICATIONFAILED") }
-	if _, err := s.Sync(context.Background(), "", ""); err == nil {
+	if _, err := s.Sync(context.Background(), ""); err == nil {
 		t.Fatal("want an error: the only account failed")
 	}
 	if _, err := os.Stat(filepath.Join(index, "xapian")); err != nil {
@@ -218,13 +218,74 @@ func TestSyncStillReindexesWhenEveryAccountFails(t *testing.T) {
 	}
 }
 
-func TestSyncOneAccountAndFolder(t *testing.T) {
+func TestSyncOneAccountIsAllFolders(t *testing.T) {
 	s, calls := testSyncer(t)
-	if _, err := s.Sync(context.Background(), "home", "INBOX"); err != nil {
+	if _, err := s.Sync(context.Background(), "home"); err != nil {
 		t.Fatal(err)
 	}
-	if len(*calls) != 1 || (*calls)[0] != "home:INBOX" {
-		t.Errorf("calls = %v, want [home:INBOX]", *calls)
+	if len(*calls) != 1 || (*calls)[0] != "home" {
+		t.Fatalf("want one mbsync run for the whole account, got %v", *calls)
+	}
+}
+
+func TestSyncWaitJoinsRunningPass(t *testing.T) {
+	s, _ := testSyncer(t)
+	release := make(chan struct{})
+	s.runCmd = func(context.Context, string, ...string) error { <-release; return nil }
+	go func() { _, _ = s.Sync(context.Background(), "home") }()
+	time.Sleep(20 * time.Millisecond)
+	if s.Wait(context.Background(), 30*time.Millisecond) {
+		t.Fatal("Wait returned done while the pass was still running")
+	}
+	st := s.Status()["home"]
+	if !st.Running || st.StartedAt.IsZero() {
+		t.Fatalf("running pass not reflected in status: %+v", st)
+	}
+	close(release)
+	if !s.Wait(context.Background(), time.Second) {
+		t.Fatal("Wait did not return done after the pass finished")
+	}
+	st = s.Status()["home"]
+	if st.Running || st.LastDuration <= 0 {
+		t.Fatalf("finished pass not reflected in status: %+v", st)
+	}
+}
+
+// TestWaitOutlivesARefusedConcurrentSync is the ownership rule in Sync: the
+// channel Wait blocks on belongs to the call that created it, and a second
+// call refused with errSyncBusy must leave it alone. Closing it there would
+// tell refresh the pass had finished the instant it collided with one.
+func TestWaitOutlivesARefusedConcurrentSync(t *testing.T) {
+	s, _ := testSyncer(t)
+	release, entered := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	s.runCmd = func(context.Context, string, ...string) error {
+		once.Do(func() { close(entered) })
+		<-release
+		return nil
+	}
+	go func() { _, _ = s.Sync(context.Background(), "home") }()
+	<-entered
+	if _, err := s.Sync(context.Background(), "home"); !errors.Is(err, errSyncBusy) {
+		t.Fatalf("second sync of a busy account returned %v, want errSyncBusy", err)
+	}
+	if s.Wait(context.Background(), 30*time.Millisecond) {
+		t.Fatal("a refused sync ended the wait for the pass it collided with")
+	}
+	close(release)
+	if !s.Wait(context.Background(), time.Second) {
+		t.Fatal("Wait did not return done after the pass finished")
+	}
+}
+
+func TestDeadlineIsNotAFailure(t *testing.T) {
+	s, _ := testSyncer(t)
+	s.runCmd = func(ctx context.Context, _ string, _ ...string) error { return context.DeadlineExceeded }
+	for i := 0; i < 3; i++ {
+		_, _ = s.Sync(context.Background(), "home")
+	}
+	if st := s.Status()["home"]; st.Failures != 0 || !st.NextRetry.IsZero() {
+		t.Fatalf("a SYNC_TIMEOUT expiry must not back off: %+v", st)
 	}
 }
 
@@ -244,16 +305,16 @@ func TestSyncIsSerialisedPerAccount(t *testing.T) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		_, _ = s.Sync(context.Background(), "home", "")
+		_, _ = s.Sync(context.Background(), "home")
 	}()
 	<-entered
 
 	// The same account is refused while its sync runs...
-	if _, err := s.Sync(context.Background(), "home", ""); !errors.Is(err, errSyncBusy) {
+	if _, err := s.Sync(context.Background(), "home"); !errors.Is(err, errSyncBusy) {
 		t.Fatalf("concurrent sync of the same account returned %v, want errSyncBusy", err)
 	}
 	// ...but a different account proceeds in parallel.
-	if _, err := s.Sync(context.Background(), "work", ""); errors.Is(err, errSyncBusy) {
+	if _, err := s.Sync(context.Background(), "work"); errors.Is(err, errSyncBusy) {
 		t.Fatal("a different account was refused while home synced")
 	}
 	if !s.Busy() {
@@ -271,12 +332,12 @@ func TestSyncRefusesAnEmptyPlainDirectory(t *testing.T) {
 	if err := os.Remove(filepath.Join(s.maildir, "work")); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.Sync(context.Background(), "", ""); err == nil {
+	if _, err := s.Sync(context.Background(), ""); err == nil {
 		t.Fatal("want a refusal for an empty plain directory")
 	}
 
 	s.initMirror = true
-	if _, err := s.Sync(context.Background(), "", ""); err != nil {
+	if _, err := s.Sync(context.Background(), ""); err != nil {
 		t.Fatalf("INIT_MIRROR should allow it: %v", err)
 	}
 }
@@ -302,7 +363,7 @@ func TestCheckInitialisedSentinel(t *testing.T) {
 		// device number from the container's point of view), so this must
 		// still refuse on the sentinel's word alone.
 		s.mountPoint = func(string) bool { return true }
-		if _, err := s.Sync(context.Background(), "", ""); err == nil {
+		if _, err := s.Sync(context.Background(), ""); err == nil {
 			t.Fatal("want a refusal: the sentinel says a mirror existed here before")
 		}
 	})
@@ -313,7 +374,7 @@ func TestCheckInitialisedSentinel(t *testing.T) {
 			t.Fatal(err)
 		}
 		s.mountPoint = func(string) bool { return true }
-		if _, err := s.Sync(context.Background(), "", ""); err != nil {
+		if _, err := s.Sync(context.Background(), ""); err != nil {
 			t.Fatalf("no sentinel + a real mount point should proceed with no opt-in: %v", err)
 		}
 	})
@@ -324,7 +385,7 @@ func TestCheckInitialisedSentinel(t *testing.T) {
 			t.Fatal(err)
 		}
 		s.initMirror = true
-		if _, err := s.Sync(context.Background(), "", ""); err != nil {
+		if _, err := s.Sync(context.Background(), ""); err != nil {
 			t.Fatalf("no sentinel + INIT_MIRROR should proceed: %v", err)
 		}
 	})
@@ -335,7 +396,7 @@ func TestCheckInitialisedSentinel(t *testing.T) {
 		if _, err := os.Stat(sentinel); err == nil {
 			t.Fatal("test precondition: sentinel should not exist yet")
 		}
-		if _, err := s.Sync(context.Background(), "home", ""); err != nil {
+		if _, err := s.Sync(context.Background(), "home"); err != nil {
 			t.Fatal(err)
 		}
 		if _, err := os.Stat(sentinel); err != nil {
@@ -351,7 +412,7 @@ func TestSyncAcceptsAnEmptyMaildirWithoutCeremony(t *testing.T) {
 	if s.initMirror {
 		t.Fatal("test precondition: initMirror should be false")
 	}
-	if _, err := s.Sync(context.Background(), "", ""); err != nil {
+	if _, err := s.Sync(context.Background(), ""); err != nil {
 		t.Fatalf("a populated maildir needs no opt-in: %v", err)
 	}
 	if len(*calls) == 0 {
@@ -362,7 +423,7 @@ func TestSyncAcceptsAnEmptyMaildirWithoutCeremony(t *testing.T) {
 func TestSyncReportsAMissingMaildir(t *testing.T) {
 	s, _ := testSyncer(t)
 	s.maildir = filepath.Join(s.maildir, "definitely-not-here")
-	_, err := s.Sync(context.Background(), "", "")
+	_, err := s.Sync(context.Background(), "")
 	if err == nil {
 		t.Fatal("want an error when the maildir does not exist")
 	}
@@ -569,7 +630,7 @@ func TestReindexSurvivesAMissingDatabase(t *testing.T) {
 
 	s := newSyncer(&Config{Accounts: []Account{{Name: "acct"}}}, maildir, index, "/tmp/none", newNotmuch(config))
 	s.runCmd = func(context.Context, string, ...string) error { return nil }
-	if _, err := s.Sync(context.Background(), "", ""); err != nil {
+	if _, err := s.Sync(context.Background(), ""); err != nil {
 		t.Fatalf("first sync against an empty index failed: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(index, "xapian")); err != nil {
@@ -584,7 +645,7 @@ func TestSyncCreatesTheAccountDirectory(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(s.maildir, "home")); err == nil {
 		t.Fatal("test precondition: the account directory should not exist yet")
 	}
-	if _, err := s.Sync(context.Background(), "home", ""); err != nil {
+	if _, err := s.Sync(context.Background(), "home"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(filepath.Join(s.maildir, "home")); err != nil {
@@ -633,7 +694,7 @@ func TestSyncBacksOffAfterConsecutiveFailures(t *testing.T) {
 	// testSyncer's runCmd fails for targets beginning "work". Two scheduled
 	// passes: the first failure retries normally, the second sets a backoff.
 	for i := 0; i < 2; i++ {
-		if _, err := s.Sync(context.Background(), "", ""); err != nil {
+		if _, err := s.Sync(context.Background(), ""); err != nil {
 			t.Fatalf("pass %d: %v", i, err)
 		}
 	}
@@ -651,7 +712,7 @@ func TestSyncBacksOffAfterConsecutiveFailures(t *testing.T) {
 	}
 
 	// The third scheduled pass skips the backed-off account.
-	if _, err := s.Sync(context.Background(), "", ""); err != nil {
+	if _, err := s.Sync(context.Background(), ""); err != nil {
 		t.Fatal(err)
 	}
 	for _, c := range (*calls)[len(*calls)-1:] {
@@ -662,7 +723,7 @@ func TestSyncBacksOffAfterConsecutiveFailures(t *testing.T) {
 
 	// A manual refresh of that account ignores the backoff.
 	before := len(*calls)
-	_, _ = s.Sync(context.Background(), "work", "INBOX")
+	_, _ = s.Sync(context.Background(), "work")
 	if len(*calls) != before+1 {
 		t.Fatal("a manual refresh must bypass backoff")
 	}

@@ -32,6 +32,11 @@ type AccountStatus struct {
 	// account ignores both.
 	Failures  int
 	NextRetry time.Time
+	// Running, StartedAt and LastDuration let a client that asked for a
+	// refresh and got "in progress" decide how long to wait.
+	Running      bool
+	StartedAt    time.Time
+	LastDuration time.Duration
 }
 
 // genNotmuchConfig writes the index configuration. mail_root points at the
@@ -199,6 +204,13 @@ type Syncer struct {
 
 	mu     sync.Mutex
 	status map[string]AccountStatus
+	// done is closed when the pass in flight finishes; nil when none is.
+	// Wait uses it so a refresh that arrives mid-pass joins rather than
+	// starts another. Guarded by mu.
+	done chan struct{}
+	// kick is read by the ticker loop in run() to reset its schedule after
+	// a manual refresh. Buffered so Kick never blocks.
+	kick chan struct{}
 }
 
 func newSyncer(cfg *Config, maildir, index, mbsyncConfig string, nm *Notmuch) *Syncer {
@@ -210,6 +222,7 @@ func newSyncer(cfg *Config, maildir, index, mbsyncConfig string, nm *Notmuch) *S
 		timeout:      time.Hour,
 		interval:     10 * time.Minute,
 		accountLocks: accountLocks(cfg),
+		kick:         make(chan struct{}, 1),
 		mountPoint:   isMountPoint,
 		status:       map[string]AccountStatus{},
 		runCmd: func(ctx context.Context, name string, args ...string) error {
@@ -241,13 +254,35 @@ func newSyncer(cfg *Config, maildir, index, mbsyncConfig string, nm *Notmuch) *S
 	}
 }
 
-// Sync mirrors one account (or all of them, when account is "") and reindexes
-// once. A failing account is recorded and skipped rather than aborting the
+// Sync mirrors every folder of one account (or of all of them, when account
+// is "") and reindexes once. A failing account is recorded and skipped rather than aborting the
 // pass: with several accounts configured, one expired password must not stop
 // the rest.
-func (s *Syncer) Sync(ctx context.Context, account, folder string) (int, error) {
+func (s *Syncer) Sync(ctx context.Context, account string) (int, error) {
 	if err := s.checkInitialised(); err != nil {
 		return 0, err
+	}
+
+	// The pass in flight is one channel, whichever call started it, so a
+	// second caller that arrives mid-pass waits for the same finish rather
+	// than starting another. Ownership is "this call created it": a call
+	// refused with errSyncBusy below must not close the channel of the pass
+	// it collided with, or Wait would report that pass finished the moment
+	// something bumped into it.
+	s.mu.Lock()
+	owner := s.done == nil
+	if owner {
+		s.done = make(chan struct{})
+	}
+	done := s.done
+	s.mu.Unlock()
+	if owner {
+		defer func() {
+			s.mu.Lock()
+			close(done)
+			s.done = nil
+			s.mu.Unlock()
+		}()
 	}
 
 	var (
@@ -286,7 +321,12 @@ func (s *Syncer) Sync(ctx context.Context, account, folder string) (int, error) 
 		go func(a Account) {
 			defer wg.Done()
 			defer lock.Unlock()
-			err := s.syncAccount(ctx, a.Name, folder)
+			s.mu.Lock()
+			st := s.status[a.Name]
+			st.Running, st.StartedAt = true, time.Now()
+			s.status[a.Name] = st
+			s.mu.Unlock()
+			err := s.syncAccount(ctx, a.Name)
 			s.record(a.Name, err)
 			resMu.Lock()
 			defer resMu.Unlock()
@@ -326,20 +366,16 @@ func (s *Syncer) Sync(ctx context.Context, account, folder string) (int, error) 
 
 // syncAccount runs one mbsync for one account under its own deadline, so a
 // provider that stops responding mid-sync cannot stall anything but itself.
-func (s *Syncer) syncAccount(ctx context.Context, name, folder string) error {
+func (s *Syncer) syncAccount(ctx context.Context, name string) error {
 	// mbsync creates mailboxes inside a store, but not the store's own
 	// root, so a first run against a fresh volume fails with "cannot open
 	// store" until this directory exists.
 	if err := os.MkdirAll(filepath.Join(s.maildir, name), 0o700); err != nil {
 		return err
 	}
-	target := name
-	if folder != "" {
-		target = name + ":" + folder
-	}
 	accountCtx, cancel := context.WithTimeout(ctx, s.timeout)
 	defer cancel()
-	return s.runCmd(accountCtx, "mbsync", "-c", s.mbsyncConfig, target)
+	return s.runCmd(accountCtx, "mbsync", "-c", s.mbsyncConfig, name)
 }
 
 // markMirrored records, in the index directory, that a mirror exists at
@@ -402,6 +438,16 @@ func (s *Syncer) record(account string, err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	st := s.status[account]
+	st.Running = false
+	st.LastDuration = time.Since(st.StartedAt)
+	if errors.Is(err, context.DeadlineExceeded) {
+		// SYNC_TIMEOUT expired mid-download. That is progress interrupted,
+		// not a refusal: mbsync journals per message, and the next pass
+		// resumes. Backing off here would halve a multi-day first mirror.
+		st.LastError = "sync deadline reached; will resume next pass"
+		s.status[account] = st
+		return
+	}
 	if err != nil {
 		st.LastError = err.Error()
 		st.Failures++
@@ -446,6 +492,34 @@ func (s *Syncer) Busy() bool {
 		l.Unlock()
 	}
 	return false
+}
+
+// Wait blocks up to d for the pass in flight. Returns true when no pass is
+// running by the time it returns, false when one still is.
+func (s *Syncer) Wait(ctx context.Context, d time.Duration) bool {
+	s.mu.Lock()
+	done := s.done
+	s.mu.Unlock()
+	if done == nil {
+		return true
+	}
+	select {
+	case <-done:
+		return true
+	case <-time.After(d):
+		return false
+	case <-ctx.Done():
+		return false
+	}
+}
+
+// Kick asks the ticker loop to restart its interval from now, so a manual
+// refresh is not followed by a scheduled pass moments later.
+func (s *Syncer) Kick() {
+	select {
+	case s.kick <- struct{}{}:
+	default:
+	}
 }
 
 // Status returns a copy of the per-account sync state, safe to read while a
