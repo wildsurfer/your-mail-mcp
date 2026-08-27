@@ -483,6 +483,42 @@ func (s *Server) searchTool(ctx context.Context, _ *mcp.CallToolRequest, a searc
 	return s.runQuery(ctx, queryArgs{Query: a.Query, Account: a.Account, IncludeExcluded: a.IncludeExcluded}, args...)
 }
 
+// mirrorNote names every account in scope whose full mirror has not yet
+// completed, with its indexed message count when notmuch can provide one, so
+// a model reading query results does not mistake a still-filling mirror for
+// a quiet mailbox. Server text, not mail text: it is prepended to output
+// that then goes through page(), never render, and must never carry
+// anything read from a message. Empty when every account in scope is
+// complete.
+func (s *Server) mirrorNote(ctx context.Context, account string) string {
+	if s.status == nil {
+		return ""
+	}
+	st := s.status()
+	var parts []string
+	for _, a := range s.cfg.Accounts {
+		if account != "" && a.Name != account {
+			continue
+		}
+		if st[a.Name].Complete {
+			continue
+		}
+		part := a.Name + " mirror incomplete"
+		if s.nm != nil {
+			if q, err := scopeQuery("", a.Name); err == nil {
+				if out, err := s.nm.run(ctx, "count", q); err == nil {
+					part += ", " + strings.TrimSpace(string(out)) + " messages indexed so far"
+				}
+			}
+		}
+		parts = append(parts, part)
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return "note: " + strings.Join(parts, "; ") + "; older mail may be missing\n"
+}
+
 // runQuery is the shape the query tools share: build the query, run notmuch,
 // wrap the output. Only the notmuch arguments differ.
 func (s *Server) runQuery(ctx context.Context, a queryArgs, nmArgs ...string) (*mcp.CallToolResult, any, error) {
@@ -494,7 +530,7 @@ func (s *Server) runQuery(ctx context.Context, a queryArgs, nmArgs ...string) (*
 	if err != nil {
 		return nil, nil, err
 	}
-	return page(string(out), 0, 0), nil, nil
+	return page(s.mirrorNote(ctx, a.Account)+string(out), 0, 0), nil, nil
 }
 
 func (s *Server) idsTool(ctx context.Context, _ *mcp.CallToolRequest, a queryArgs) (*mcp.CallToolResult, any, error) {
@@ -514,7 +550,7 @@ func (s *Server) countTool(ctx context.Context, _ *mcp.CallToolRequest, a queryA
 	if err != nil {
 		return nil, nil, err
 	}
-	return page(fmt.Sprintf("%d", n), 0, 0), nil, nil
+	return page(s.mirrorNote(ctx, a.Account)+fmt.Sprintf("%d", n), 0, 0), nil, nil
 }
 
 type idArgs struct {
@@ -687,9 +723,7 @@ func (s *Server) statusTool(ctx context.Context, _ *mcp.CallToolRequest, _ struc
 	for _, a := range s.cfg.Accounts {
 		v := st[a.Name]
 		b.WriteString("account: " + a.Name + "\n")
-		if v.LastSync.IsZero() {
-			b.WriteString("  first full sync: not completed yet — search results may be partial\n")
-		} else {
+		if !v.LastSync.IsZero() {
 			b.WriteString("  last successful sync: " + v.LastSync.UTC().Format(time.RFC3339) + "\n")
 		}
 		q, err := scopeQuery("", a.Name)
@@ -697,6 +731,11 @@ func (s *Server) statusTool(ctx context.Context, _ *mcp.CallToolRequest, _ struc
 			if out, err := s.nm.run(ctx, "count", q); err == nil {
 				b.WriteString("  messages indexed: " + strings.TrimSpace(string(out)) + "\n")
 			}
+		}
+		if v.Complete {
+			b.WriteString("  full mirror: complete\n")
+		} else {
+			b.WriteString("  full mirror: not yet complete\n")
 		}
 		if v.LastError != "" {
 			b.WriteString(fmt.Sprintf("  last error (%d consecutive): %s\n", v.Failures, v.LastError))

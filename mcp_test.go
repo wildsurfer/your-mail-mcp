@@ -376,6 +376,30 @@ func TestCountAndIdsAgree(t *testing.T) {
 	}
 }
 
+func TestQueryResultsCarryIncompleteMirrorNote(t *testing.T) {
+	s := newServer(&Config{Accounts: []Account{{Name: "home"}, {Name: "gmail"}}}, nil, t.TempDir())
+	s.status = func() map[string]AccountStatus {
+		return map[string]AccountStatus{
+			"home":  {Complete: true},
+			"gmail": {Complete: false},
+		}
+	}
+	ctx := context.Background()
+
+	if got := s.mirrorNote(ctx, "home"); got != "" {
+		t.Fatalf("complete account must add no note, got %q", got)
+	}
+	got := s.mirrorNote(ctx, "")
+	for _, want := range []string{"gmail", "mirror incomplete", "older mail may be missing"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("want %q in note, got %q", want, got)
+		}
+	}
+	if strings.Contains(got, "home") {
+		t.Fatalf("complete account must not be named, got %q", got)
+	}
+}
+
 func TestRejectsUnknownPrefix(t *testing.T) {
 	s := testServer(t)
 	if _, _, err := s.searchTool(context.Background(), nil, searchArgs{Query: "sender:alice"}); err == nil {
@@ -1034,7 +1058,7 @@ func TestStatusToolReportsFirstSyncAndBackoff(t *testing.T) {
 	out := res.Content[0].(*mcp.TextContent).Text
 	for _, want := range []string{
 		"a sync pass is running right now",
-		"first full sync: not completed yet",
+		"full mirror: not yet complete",
 		"messages indexed: 1",
 		"last error (3 consecutive): quota exceeded",
 		"backing off; next scheduled attempt: " + retry.UTC().Format(time.RFC3339),
