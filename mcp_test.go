@@ -1135,3 +1135,29 @@ func TestBinaryAttachmentWithoutHTTPIsSavedToIndex(t *testing.T) {
 		t.Fatalf("id must be sanitised in the filename: %s", path)
 	}
 }
+
+func TestSaveAttachmentDoesNotCollideOnSameSanitisedID(t *testing.T) {
+	s := newServer(&Config{}, nil, t.TempDir())
+	s.index = t.TempDir()
+	// both "@" and "!" fall outside the allowed set and become "_", so both
+	// ids sanitise to "_a_b_": distinct ids must still not overwrite.
+	p1, err := s.saveAttachment("<a@b>", 3, []byte{1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	p2, err := s.saveAttachment("<a!b>", 3, []byte{2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p1 == p2 {
+		t.Fatalf("distinct ids produced the same path: %s", p1)
+	}
+	b1, err := os.ReadFile(p1)
+	if err != nil || !bytes.Equal(b1, []byte{1}) {
+		t.Fatalf("first file got clobbered: %v %v", b1, err)
+	}
+	b2, err := os.ReadFile(p2)
+	if err != nil || !bytes.Equal(b2, []byte{2}) {
+		t.Fatalf("second file wrong content: %v %v", b2, err)
+	}
+}

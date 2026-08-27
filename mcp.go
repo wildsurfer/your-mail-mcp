@@ -349,7 +349,14 @@ func (s *Server) saveAttachment(id string, part int, raw []byte) (string, error)
 		}
 		return '_'
 	}, id)
-	path := filepath.Join(dir, fmt.Sprintf("%s-%d", safe, part))
+	// Sanitising collapses distinct ids (e.g. "@" and "!" both become "_"),
+	// so a hash of the raw id keeps the name unique; truncating safe also
+	// keeps the whole name well under filesystem name-length limits.
+	if len(safe) > 64 {
+		safe = safe[:64]
+	}
+	hash := sha256.Sum256([]byte(id))
+	path := filepath.Join(dir, fmt.Sprintf("%s-%x-%d", safe, hash[:4], part))
 	return path, os.WriteFile(path, raw, 0o600)
 }
 
