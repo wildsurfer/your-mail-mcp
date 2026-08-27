@@ -14,6 +14,7 @@ package main
 // and torn down afterwards, including volumes.
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"net/http"
@@ -40,6 +41,17 @@ func liveCompose(t *testing.T, args ...string) {
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("docker %s: %v\n%s", strings.Join(full, " "), err, out)
 	}
+}
+
+// liveComposeOutput is liveCompose for the calls whose output is the assertion.
+func liveComposeOutput(t *testing.T, args ...string) string {
+	t.Helper()
+	full := append([]string{"compose", "-p", "ymm-live", "-f", "testdata/live/compose.live.yaml"}, args...)
+	out, err := exec.Command("docker", full...).CombinedOutput()
+	if err != nil {
+		t.Fatalf("docker %s: %v\n%s", strings.Join(full, " "), err, out)
+	}
+	return string(out)
 }
 
 func seed(t *testing.T, id, from, subject, body string, html bool) {
@@ -243,5 +255,53 @@ func TestLive(t *testing.T) {
 			t.Fatal("the refreshed message never appeared")
 		}
 		time.Sleep(2 * time.Second)
+	}
+
+	// The recent channel is its own mbsync invocation into its own store, and
+	// MaxMessages there has only ever been read about, never run against a
+	// server. Its maildir holds messages only if that invocation worked.
+	ls := liveComposeOutput(t, "exec", "-T", "your-mail-mcp", "ls", "-R", "/mail")
+	// ls -R prints a "dir:" header per directory and a blank line after each
+	// listing, so a directory with nothing in it is a header and no entries.
+	if _, after, found := strings.Cut(ls, "/mail/testbox-recent/INBOX/new:\n"); !found || strings.HasPrefix(after, "\n") {
+		t.Fatalf("the recent channel pulled no mail into its own maildir; ls -R /mail:\n%s", ls)
+	}
+}
+
+// TestLiveBareImageAnswersToolsList is the property every directory checks:
+// the shipped image, run with no environment and no volumes, speaks MCP on
+// stdin and lists its tools.
+func TestLiveBareImageAnswersToolsList(t *testing.T) {
+	if _, err := exec.LookPath("docker"); err != nil {
+		t.Skip("docker is not installed")
+	}
+	if out, err := exec.Command("docker", "build", "-t", "ymm-live-bare", ".").CombinedOutput(); err != nil {
+		t.Fatalf("docker build: %v\n%s", err, out)
+	}
+
+	cmd := exec.Command("docker", "run", "-i", "--rm", "ymm-live-bare")
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	in, err := cmd.StdinPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	fmt.Fprint(in, strings.Join([]string{
+		`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"live","version":"0"}}}`,
+		`{"jsonrpc":"2.0","method":"notifications/initialized"}`,
+		`{"jsonrpc":"2.0","id":2,"method":"tools/list"}`,
+	}, "\n")+"\n")
+	// Docker attaches stdin asynchronously, so a pipe that closes the instant
+	// the lines are written can take the reply with it. Hold it open.
+	time.Sleep(time.Second)
+	in.Close()
+	if err := cmd.Wait(); err != nil {
+		t.Fatalf("docker run: %v\n%s", err, out.String())
+	}
+	if got := strings.Count(out.String(), `"name":"`); got < 11 {
+		t.Fatalf("want at least 11 tool names in tools/list, got %d:\n%s", got, out.String())
 	}
 }
