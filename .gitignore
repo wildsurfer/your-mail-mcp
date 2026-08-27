@@ -15,3 +15,6 @@ CLAUDE.local.md
 
 # Playwright MCP session dumps.
 /.playwright-mcp/
+
+# Git worktrees for plan execution.
+/.worktrees/
