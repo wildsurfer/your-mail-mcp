@@ -139,6 +139,10 @@ func TestLoadConfigRejectsBadInput(t *testing.T) {
 			`{"accounts":[{"name":"a","host":"h","user":"me@example.com\ttab","password":"p"}]}`,
 			"user",
 		},
+		"name reserved for the recent maildir": {
+			`{"accounts":[{"name":"work-recent","host":"h","user":"u","password":"p"}]}`,
+			"-recent",
+		},
 		"space in user": {
 			`{"accounts":[{"name":"a","host":"h","user":"me user","password":"p"}]}`,
 			"user",

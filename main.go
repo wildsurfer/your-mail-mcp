@@ -100,6 +100,12 @@ func loadConfig(path string) (*Config, error) {
 		if a.Name == "" || strings.ContainsAny(a.Name, `/\ "'`) {
 			return nil, fmt.Errorf("account %d: name must be non-empty and free of spaces, quotes and slashes", i)
 		}
+		// Each account owns two maildirs, <name> and <name>-recent, so an
+		// account literally called "x-recent" would share a directory with
+		// account "x" and answer x's account-scoped queries with its mail.
+		if strings.HasSuffix(a.Name, "-recent") {
+			return nil, fmt.Errorf("account %q: a name may not end in -recent; that is the directory of account %q's recent mail", a.Name, strings.TrimSuffix(a.Name, "-recent"))
+		}
 		if seen[a.Name] {
 			return nil, fmt.Errorf("account %q: duplicate name", a.Name)
 		}
