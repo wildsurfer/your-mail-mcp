@@ -12,3 +12,6 @@ CLAUDE.local.md
 
 # Machine-specific deployment config. Never commit.
 /compose.override.yaml
+
+# Playwright MCP session dumps.
+/.playwright-mcp/

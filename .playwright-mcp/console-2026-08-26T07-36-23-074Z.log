@@ -1,2 +1,0 @@
-[     694ms] [ERROR] Failed to load resource: the server responded with a status of 404 () @ https://mcpservers.org/api/logo?url=https%3A%2F%2Floki.freedomlab.space%2Fmcp-docs&size=64&fallback=error:0
-[     724ms] [ERROR] Failed to load resource: the server responded with a status of 404 () @ https://mcpservers.org/api/logo?url=https%3A%2F%2Fdocs.pzero.studio%2Fagents%2Fmcp&size=64&fallback=error:0
