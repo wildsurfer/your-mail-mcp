@@ -93,6 +93,49 @@ Eleven tools, all read-only:
 and/or/not), an optional `account` to scope to one account, and can include
 junk/trash with `include_excluded`.
 
+## Why not one of the others
+
+There are around forty email MCP servers on GitHub. The full survey, including
+which claims were read in source and which were taken from a README, is in
+[`docs/research/email-mcp-landscape.md`](docs/research/email-mcp-landscape.md).
+Two of them are close enough to this one to be worth naming here.
+
+**[igor47/notmuchproxy](https://github.com/igor47/notmuchproxy)** is the nearest
+thing to this server that already existed, and a large part of why this one has
+the shape it does. It reads a notmuch archive, has no write path to disable
+rather than a flag that turns one off, ships a ghcr image, and takes either a
+static bearer token or full OIDC with dynamic client registration. Its query
+validation, which rejects an unknown prefix with an explanation instead of
+returning an empty result that looks like an empty mailbox, is a better idea
+than anything here started with, and `validateQuery` in `notmuch.go` is that
+idea reimplemented.
+
+Two things differ. It reads an archive you keep up to date yourself, so it
+assumes you already run mbsync and notmuch; this server generates the mbsync
+configuration, syncs every account in parallel, and discovers each account's
+junk and trash over IMAP `LIST`. And it has no `account` parameter, so several
+mailboxes in one index are addressed through tags or folder queries, where here
+`account` is a parameter on every query tool. If you already run a notmuch
+setup you are happy with, notmuchproxy is the smaller thing to deploy and you
+should use it instead of this.
+
+**[hgn/mcp-server-notmuch](https://github.com/hgn/mcp-server-notmuch)** is stdio
+only, so one client on one machine, but its handling of untrusted content is the
+best in the survey. The single `render()` chokepoint here, which marks every
+byte of mail text in one place so that no individual tool can forget to, comes
+from its `render.py`.
+
+Everything else surveyed talks live IMAP and ships a send path, which is the
+opposite of both choices this server rests on.
+
+### How proven this is
+
+One author, one operator, three real accounts: one iCloud and two Gmail. No
+third-party security review, and nobody else has deployed it. notmuchproxy has
+zero stars and a more convincing production story than this does. Read
+[Security](#security) and [What it cannot do](#what-it-cannot-do) before you
+point this at a mailbox you care about.
+
 ## Running it
 
 Three ways to run this. They differ in one thing: who can reach the server.

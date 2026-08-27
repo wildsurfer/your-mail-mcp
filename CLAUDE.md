@@ -14,7 +14,9 @@ against real tools is in `docs/reviews/`.
 v1 is implemented: eleven read tools, multi-account sync, SPECIAL-USE junk
 discovery, OAuth with dynamic client registration, and a container image.
 
-Not verified against a real mail account yet. See "Before trusting it" below.
+Running against one real iCloud account and two real Gmail accounts. That is
+one operator's mailbox, so see "Before trusting it" below for what is still
+unproven.
 
 ## Invariants
 
@@ -108,12 +110,15 @@ without changing the spec first.
 
 ## Before trusting it
 
-The gap between "tests pass" and "safe against a real mailbox" is these three:
+Sync and serving now run against real iCloud and Gmail accounts, so the IMAP
+`LIST` and the mirror are exercised in the field. The gap between that and
+"safe against any real mailbox" is these three:
 
-1. SPECIAL-USE discovery against a real Gmail and a real iCloud account. The
-   live test covers a real IMAP conversation end to end, but its test server
-   does not advertise SPECIAL-USE, so junk discovery against the providers that
-   do remains unverified in the field.
+1. Whether SPECIAL-USE discovery picks the *right* junk and trash folders per
+   provider. It runs against real Gmail and iCloud now, but nobody has read
+   back the `folders` output and confirmed the discovered names against what
+   the provider actually calls those mailboxes. The live test's server does not
+   advertise SPECIAL-USE, so the test suite cannot answer this.
 2. A real connector handshake. The OAuth flow has only been exercised through
-   `httptest`.
+   `httptest` and over localhost.
 3. The README quick start, followed literally on a clean machine.
