@@ -231,9 +231,14 @@ func TestSyncOneAccountIsAllFolders(t *testing.T) {
 func TestSyncWaitJoinsRunningPass(t *testing.T) {
 	s, _ := testSyncer(t)
 	release := make(chan struct{})
-	s.runCmd = func(context.Context, string, ...string) error { <-release; return nil }
+	entered := make(chan struct{}, 1)
+	s.runCmd = func(context.Context, string, ...string) error {
+		entered <- struct{}{}
+		<-release
+		return nil
+	}
 	go func() { _, _ = s.Sync(context.Background(), "home") }()
-	time.Sleep(20 * time.Millisecond)
+	<-entered
 	if s.Wait(context.Background(), 30*time.Millisecond) {
 		t.Fatal("Wait returned done while the pass was still running")
 	}
@@ -278,9 +283,75 @@ func TestWaitOutlivesARefusedConcurrentSync(t *testing.T) {
 	}
 }
 
+// TestScheduledPassIsBusyWhenEveryAccountIs is finding 1: a pass over all
+// accounts skips a busy account and carries on, which is right for the
+// ticker but told refresh "0 new message(s)" while the first mirror was 3%
+// done. A pass that ran nothing of its own reports busy, so refresh joins
+// the pass in flight instead.
+func TestScheduledPassIsBusyWhenEveryAccountIs(t *testing.T) {
+	s, _ := testSyncer(t)
+	release := make(chan struct{})
+	// Both accounts, so the second pass finds every lock taken.
+	entered := make(chan struct{}, 2)
+	s.runCmd = func(context.Context, string, ...string) error {
+		entered <- struct{}{}
+		<-release
+		return nil
+	}
+	go func() { _, _ = s.Sync(context.Background(), "") }()
+	<-entered
+	<-entered
+
+	if _, err := s.Sync(context.Background(), ""); !errors.Is(err, errSyncBusy) {
+		t.Fatalf("a pass with every account already syncing returned %v, want errSyncBusy", err)
+	}
+	if s.Wait(context.Background(), 30*time.Millisecond) {
+		t.Fatal("Wait returned done while the pass every account was busy with ran on")
+	}
+	close(release)
+}
+
+// TestWaitCoversEveryPassInFlight is finding 3: two passes can overlap on
+// different accounts, and the first to finish must not report the second
+// one done.
+func TestWaitCoversEveryPassInFlight(t *testing.T) {
+	s, _ := testSyncer(t)
+	first, second := make(chan struct{}), make(chan struct{})
+	entered := make(chan struct{}, 2)
+	s.runCmd = func(_ context.Context, _ string, args ...string) error {
+		name := args[len(args)-1]
+		entered <- struct{}{}
+		if name == "work" {
+			<-first
+		} else {
+			<-second
+		}
+		return nil
+	}
+	go func() { _, _ = s.Sync(context.Background(), "work") }()
+	<-entered
+	go func() { _, _ = s.Sync(context.Background(), "home") }()
+	<-entered
+
+	close(first)
+	if s.Wait(context.Background(), 50*time.Millisecond) {
+		t.Fatal("Wait returned done while the second pass was still running")
+	}
+	close(second)
+	if !s.Wait(context.Background(), time.Second) {
+		t.Fatal("Wait did not return done after both passes finished")
+	}
+}
+
 func TestDeadlineIsNotAFailure(t *testing.T) {
 	s, _ := testSyncer(t)
-	s.runCmd = func(ctx context.Context, _ string, _ ...string) error { return context.DeadlineExceeded }
+	s.timeout = 20 * time.Millisecond
+	s.runCmd = func(ctx context.Context, _ string, _ ...string) error {
+		<-ctx.Done()
+		// What exec.CommandContext actually returns when it kills mbsync on
+		// the deadline. Not the sentinel, which is the whole point.
+		return errors.New("mbsync: signal: killed")
+	}
 	for i := 0; i < 3; i++ {
 		_, _ = s.Sync(context.Background(), "home")
 	}

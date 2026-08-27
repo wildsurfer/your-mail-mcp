@@ -866,12 +866,20 @@ func TestRefreshNamesSkippedBackedOffAccount(t *testing.T) {
 	s.sync = func(context.Context, string) (int, error) { return 2, nil }
 	s.syncWait = func(context.Context, time.Duration) bool { return true }
 	s.status = func() map[string]AccountStatus {
-		return map[string]AccountStatus{"gmail": {NextRetry: retry, LastError: "quota"}}
+		return map[string]AccountStatus{
+			"gmail": {NextRetry: retry, LastError: "quota"},
+			// Still mid-pass, so this pass could not take its lock and the
+			// count above does not cover it.
+			"home": {Running: true},
+		}
 	}
 	res, _, _ := s.refreshTool(context.Background(), nil, refreshArgs{})
 	got := res.Content[0].(*mcp.TextContent).Text
 	if !strings.Contains(got, "gmail") || !strings.Contains(got, "skipped") || !strings.Contains(got, "backing off") {
 		t.Fatalf("refresh must name a skipped account, got:\n%s", got)
+	}
+	if !strings.Contains(got, "joined a running sync for: home") {
+		t.Fatalf("refresh must name an account it could not sync because a pass had it, got:\n%s", got)
 	}
 }
 

@@ -208,6 +208,8 @@ type Syncer struct {
 	// Wait uses it so a refresh that arrives mid-pass joins rather than
 	// starts another. Guarded by mu.
 	done chan struct{}
+	// inflight counts the Sync calls sharing done. Guarded by mu.
+	inflight int
 	// kick is read by the ticker loop in run() to reset its schedule after
 	// a manual refresh. Buffered so Kick never blocks.
 	kick chan struct{}
@@ -265,31 +267,34 @@ func (s *Syncer) Sync(ctx context.Context, account string) (int, error) {
 
 	// The pass in flight is one channel, whichever call started it, so a
 	// second caller that arrives mid-pass waits for the same finish rather
-	// than starting another. Ownership is "this call created it": a call
-	// refused with errSyncBusy below must not close the channel of the pass
-	// it collided with, or Wait would report that pass finished the moment
-	// something bumped into it.
+	// than starting another. inflight counts the calls holding it, and only
+	// the last one out closes it. A count rather than a single owner
+	// because two things break otherwise: a call refused with errSyncBusy
+	// below would close the channel of the pass it collided with, and an
+	// owner that finishes first would report done while a slower pass on
+	// another account, started later, is still downloading.
 	s.mu.Lock()
-	owner := s.done == nil
-	if owner {
+	if s.done == nil {
 		s.done = make(chan struct{})
 	}
 	done := s.done
+	s.inflight++
 	s.mu.Unlock()
-	if owner {
-		defer func() {
-			s.mu.Lock()
+	defer func() {
+		s.mu.Lock()
+		s.inflight--
+		if s.inflight == 0 {
 			close(done)
 			s.done = nil
-			s.mu.Unlock()
-		}()
-	}
+		}
+		s.mu.Unlock()
+	}()
 
 	var (
-		wg                sync.WaitGroup
-		resMu             sync.Mutex
-		attempted, failed int
-		lastErr           error
+		wg                      sync.WaitGroup
+		resMu                   sync.Mutex
+		attempted, failed, busy int
+		lastErr                 error
 	)
 	for _, a := range s.cfg.Accounts {
 		if account != "" && a.Name != account {
@@ -315,6 +320,7 @@ func (s *Syncer) Sync(ctx context.Context, account string) (int, error) {
 			if account != "" {
 				return 0, errSyncBusy
 			}
+			busy++
 			continue
 		}
 		wg.Add(1)
@@ -361,6 +367,14 @@ func (s *Syncer) Sync(ctx context.Context, account string) (int, error) {
 	if attempted > 0 && failed == attempted {
 		return 0, lastErr
 	}
+	// Every eligible account was already syncing, so this pass ran nothing
+	// of its own. Report that the same way a named busy account does: a
+	// refresh then joins the pass in flight, instead of reporting the zero
+	// this pass would otherwise return while a first mirror is 3% done. The
+	// ticker ignores errSyncBusy, so its skip-and-continue is unchanged.
+	if attempted == 0 && busy > 0 {
+		return 0, errSyncBusy
+	}
 	return added, reindexErr
 }
 
@@ -375,7 +389,15 @@ func (s *Syncer) syncAccount(ctx context.Context, name string) error {
 	}
 	accountCtx, cancel := context.WithTimeout(ctx, s.timeout)
 	defer cancel()
-	return s.runCmd(accountCtx, "mbsync", "-c", s.mbsyncConfig, name)
+	err := s.runCmd(accountCtx, "mbsync", "-c", s.mbsyncConfig, name)
+	if err != nil && accountCtx.Err() != nil && ctx.Err() == nil {
+		// exec kills mbsync when the deadline passes, so what comes back is
+		// an ExitError reading "signal: killed", never the context error.
+		// Translate it, or record cannot tell an interrupted download from
+		// a provider refusing, and backs off a mirror that was working.
+		return fmt.Errorf("sync deadline %s reached: %w", s.timeout, context.DeadlineExceeded)
+	}
+	return err
 }
 
 // markMirrored records, in the index directory, that a mirror exists at

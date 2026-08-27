@@ -805,6 +805,21 @@ func (s *Server) refreshTool(ctx context.Context, _ *mcp.CallToolRequest, a refr
 			break
 		}
 		fmt.Fprintf(&b, "%d new message(s)\n", r.n)
+		if a.Account == "" {
+			// A whole-fleet pass skips an account another pass already has,
+			// so the count above does not cover it. Naming it is the
+			// difference between "no new mail" and "not looked at yet".
+			var running []string
+			st := s.status()
+			for _, acct := range s.cfg.Accounts {
+				if st[acct.Name].Running {
+					running = append(running, acct.Name)
+				}
+			}
+			if len(running) > 0 {
+				fmt.Fprintf(&b, "joined a running sync for: %s\n", strings.Join(running, ", "))
+			}
+		}
 	case <-time.After(refreshWait):
 		b.WriteString(s.inProgress())
 	}
