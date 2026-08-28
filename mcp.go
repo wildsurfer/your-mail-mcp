@@ -386,7 +386,7 @@ const attachmentLinkTTL = 15 * time.Minute
 // refreshWait bounds how long the refresh tool blocks. A full pass over a
 // large mailbox takes minutes, far longer than a client will hold a tool
 // call open, so refresh reports what is happening instead of waiting it out.
-const refreshWait = 20 * time.Second
+var refreshWait = 20 * time.Second
 
 // attachmentSig signs one (id, part, expiry) triple. The raw endpoint accepts
 // the signature in place of a bearer token, so a link can be opened in a

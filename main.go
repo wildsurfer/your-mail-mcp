@@ -263,6 +263,24 @@ func refreshExclusions(ctx context.Context, cfg *Config, srv *Server) {
 // runTicker calls fn every interval until ctx is cancelled. It does not fire
 // overlapping passes itself; fn (the syncer) is responsible for refusing a
 // concurrent run, since the ticker has no way to know how long fn will take.
+// runResettableTicker is runTicker with a kick: a receive on kick restarts
+// the interval from now, so a pass asked for by hand is not followed by a
+// scheduled one moments later.
+func runResettableTicker(ctx context.Context, every time.Duration, kick <-chan struct{}, fn func(context.Context)) {
+	t := time.NewTicker(every)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-kick:
+			t.Reset(every)
+		case <-t.C:
+			fn(ctx)
+		}
+	}
+}
+
 func runTicker(ctx context.Context, every time.Duration, fn func(context.Context)) {
 	t := time.NewTicker(every)
 	defer t.Stop()
@@ -454,20 +472,7 @@ func run(ctx context.Context, stdio bool) error {
 	go sync(ctx)
 	// Not runTicker: a manual refresh resets the schedule, so that a pass
 	// asked for by hand is not followed by a scheduled one moments later.
-	go func() {
-		t := time.NewTicker(e.SyncInterval)
-		defer t.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-syncer.kick:
-				t.Reset(e.SyncInterval)
-			case <-t.C:
-				sync(ctx)
-			}
-		}
-	}()
+	go runResettableTicker(ctx, e.SyncInterval, syncer.kick, sync)
 
 	m := mcp.NewServer(&mcp.Implementation{Name: "your-mail-mcp", Version: "0.3.0"}, nil)
 	srv.registerTools(m)

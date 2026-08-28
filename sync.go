@@ -63,19 +63,19 @@ synchronize_flags=true
 `, index, maildir)
 }
 
-// genMbsyncrc writes one channel per account. The file is generated rather than
-// mounted for two reasons: the four read-only directives cannot be edited into
-// something that pushes, and a stray blank line cannot silently demote them to
-// global options.
-//
-// The password is written into the file. The file lives on the ordinary
-// container filesystem, in a directory only this process writes to, at mode
-// 0600, so it is no more exposed than the environment it came from.
 // channelTail closes every generated channel. The first four lines are the
 // read-only guarantee; they must appear once per channel, and the directive
 // test counts them.
 const channelTail = "Sync Pull\nCreate Near\nRemove None\nExpunge None\nSyncState *\nCopyArrivalDate yes\n"
 
+// genMbsyncrc writes two channels per account. The file is generated rather
+// than mounted for two reasons: the four read-only directives cannot be edited
+// into something that pushes, and a stray blank line cannot silently demote
+// them to global options.
+//
+// The password is written into the file. The file lives on the ordinary
+// container filesystem, in a directory only this process writes to, at mode
+// 0600, so it is no more exposed than the environment it came from.
 func genMbsyncrc(cfg *Config, maildir string) string {
 	var b strings.Builder
 	b.WriteString("# generated at startup; edits are discarded on restart\n")
@@ -237,6 +237,18 @@ type Syncer struct {
 	kick chan struct{}
 }
 
+// execCommand is the real runCmd: one process, its combined output, and an
+// error that carries that output. Kept as a named function so a test can
+// run it against a real process and check what a killed one looks like.
+func execCommand(ctx context.Context, name string, args ...string) (string, error) {
+	cmd := exec.CommandContext(ctx, name, args...)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return string(out), fmt.Errorf("%s: %w: %s", name, err, strings.TrimSpace(string(out)))
+	}
+	return string(out), nil
+}
+
 func newSyncer(cfg *Config, maildir, index, mbsyncConfig string, nm *Notmuch) *Syncer {
 	return &Syncer{
 		cfg:          cfg,
@@ -249,14 +261,7 @@ func newSyncer(cfg *Config, maildir, index, mbsyncConfig string, nm *Notmuch) *S
 		kick:         make(chan struct{}, 1),
 		mountPoint:   isMountPoint,
 		status:       map[string]AccountStatus{},
-		runCmd: func(ctx context.Context, name string, args ...string) (string, error) {
-			cmd := exec.CommandContext(ctx, name, args...)
-			out, err := cmd.CombinedOutput()
-			if err != nil {
-				return string(out), fmt.Errorf("%s: %w: %s", name, err, strings.TrimSpace(string(out)))
-			}
-			return string(out), nil
-		},
+		runCmd:       execCommand,
 		reindex: func(ctx context.Context) (int, error) {
 			// A missing database is the normal state on a first run: notmuch
 			// new is what creates it. The count is only here to report how

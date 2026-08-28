@@ -221,6 +221,29 @@ func TestDiscoveryIntervalIsMuchLongerThanSync(t *testing.T) {
 	}
 }
 
+func TestResettableTickerRestartsOnKick(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	kick := make(chan struct{}, 1)
+	ticks := make(chan struct{}, 8)
+	go runResettableTicker(ctx, 300*time.Millisecond, kick, func(context.Context) { ticks <- struct{}{} })
+
+	// Kick at 200ms: without the reset the first tick lands at 300ms, with
+	// it at 500ms. Check at 400ms, which is clear of both by 100ms.
+	time.Sleep(200 * time.Millisecond)
+	kick <- struct{}{}
+	select {
+	case <-ticks:
+		t.Fatal("a kick did not push the next tick out")
+	case <-time.After(200 * time.Millisecond):
+	}
+	select {
+	case <-ticks:
+	case <-time.After(2 * time.Second):
+		t.Fatal("ticker did not fire after the reset interval")
+	}
+}
+
 func TestRunTickerFiresUntilCancelled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	ticks := make(chan struct{}, 4)

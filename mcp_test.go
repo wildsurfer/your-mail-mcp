@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
 	"errors"
 	"net/http/httptest"
@@ -1116,6 +1117,92 @@ func TestStatusExplainsNoAccounts(t *testing.T) {
 	got := res.Content[0].(*mcp.TextContent).Text
 	if !strings.Contains(got, "no accounts configured") || !strings.Contains(got, "accounts.json") {
 		t.Fatalf("status without accounts should say how to configure, got:\n%s", got)
+	}
+}
+
+// bigAttachmentFixture carries two parts just past attachmentCap: a PNG
+// (part 2) and a PDF (part 3), each base64-encoded so decoding is part of
+// what the test checks. Returns the raw bytes of each so a test can compare
+// what came out with what went in.
+func bigAttachmentFixture(t *testing.T) (s *Server, png, pdf []byte) {
+	t.Helper()
+	png = bytes.Repeat([]byte("\x89PNG\r\n\x1a\n"), attachmentCap/8+1)
+	pdf = bytes.Repeat([]byte("%PDF-1.4\n"), attachmentCap/9+1)
+	msg := "From: a@example.com\r\nTo: me@work\r\nSubject: big\r\nMessage-ID: <big1@example.com>\r\n" +
+		"Date: Tue, 18 Aug 2026 10:00:00 +0000\r\nMIME-Version: 1.0\r\n" +
+		"Content-Type: multipart/mixed; boundary=B\r\n\r\n" +
+		"--B\r\nContent-Type: image/png\r\nContent-Disposition: attachment; filename=big.png\r\n" +
+		"Content-Transfer-Encoding: base64\r\n\r\n" + base64.StdEncoding.EncodeToString(png) + "\r\n" +
+		"--B\r\nContent-Type: application/pdf\r\nContent-Disposition: attachment; filename=big.pdf\r\n" +
+		"Content-Transfer-Encoding: base64\r\n\r\n" + base64.StdEncoding.EncodeToString(pdf) + "\r\n--B--\r\n"
+	maildir, _, config := newFixture(t, map[string][]string{"work/INBOX": {msg}})
+	s = newServer(&Config{Accounts: []Account{{Name: "work"}}}, newNotmuch(config), maildir)
+	return s, png, pdf
+}
+
+func TestAttachmentImagePastCapReturnsLink(t *testing.T) {
+	s, _, _ := bigAttachmentFixture(t)
+	s.publicURL = "https://example.test"
+	out, _, err := s.attachmentTool(context.Background(), nil, attachmentArgs{ID: "big1@example.com", Part: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, isImage := out.Content[0].(*mcp.ImageContent); isImage {
+		t.Fatal("an image past the cap came back inline")
+	}
+	if got := resultText(t, out); !strings.Contains(got, "/attachment/big1@example.com/2?exp=") {
+		t.Fatalf("want a signed link for the oversized image, got:\n%s", got)
+	}
+}
+
+func TestAttachmentPastCapSavedToIndexIntact(t *testing.T) {
+	s, _, pdf := bigAttachmentFixture(t)
+	s.index = t.TempDir()
+	if _, _, err := s.attachmentTool(context.Background(), nil, attachmentArgs{ID: "big1@example.com", Part: 3}); err != nil {
+		t.Fatal(err)
+	}
+	entries, err := os.ReadDir(filepath.Join(s.index, "attachments"))
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("want exactly one saved file, got %v %v", entries, err)
+	}
+	got, err := os.ReadFile(filepath.Join(s.index, "attachments", entries[0].Name()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sha256.Sum256(got) != sha256.Sum256(pdf) {
+		t.Fatalf("saved %d bytes that do not match the %d-byte part", len(got), len(pdf))
+	}
+}
+
+func TestAttachmentDownloadStreamsPastCapIntact(t *testing.T) {
+	s, _, pdf := bigAttachmentFixture(t)
+	rec := httptest.NewRecorder()
+	s.serveAttachment(rec, httptest.NewRequest("GET", "/attachment/x/3", nil), "big1@example.com", 3)
+	if rec.Code != 200 {
+		t.Fatalf("status %d: %s", rec.Code, rec.Body.String())
+	}
+	if sha256.Sum256(rec.Body.Bytes()) != sha256.Sum256(pdf) {
+		t.Fatalf("download of %d bytes does not match the %d-byte part", rec.Body.Len(), len(pdf))
+	}
+}
+
+func TestRefreshGivesUpAfterTheBoundedWait(t *testing.T) {
+	prev := refreshWait
+	refreshWait = 50 * time.Millisecond
+	t.Cleanup(func() { refreshWait = prev })
+	s := newServer(&Config{Accounts: []Account{{Name: "home"}}}, nil, t.TempDir())
+	release := make(chan struct{})
+	t.Cleanup(func() { close(release) })
+	s.sync = func(context.Context, string) (int, error) { <-release; return 0, nil }
+	s.status = func() map[string]AccountStatus {
+		return map[string]AccountStatus{"home": {Running: true, StartedAt: time.Now()}}
+	}
+	res, _, err := s.refreshTool(context.Background(), nil, refreshArgs{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := resultText(t, res); !strings.Contains(got, "sync in progress") {
+		t.Fatalf("a pass outliving the bound must report in progress, got:\n%s", got)
 	}
 }
 

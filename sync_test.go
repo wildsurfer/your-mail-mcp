@@ -475,6 +475,59 @@ func TestDeadlineIsNotAFailure(t *testing.T) {
 	}
 }
 
+// TestDeadlineTranslatesARealKilledProcess runs the real exec path under a
+// deadline, because the stubbed test above only proves the translation
+// handles the string it is given. exec returns "signal: killed" when it
+// kills the child, not the context error, and that is what production sees.
+func TestDeadlineTranslatesARealKilledProcess(t *testing.T) {
+	if _, err := exec.LookPath("sleep"); err != nil {
+		t.Skip("sleep is not installed")
+	}
+	s, _ := testSyncer(t)
+	s.timeout = 50 * time.Millisecond
+	s.runCmd = func(ctx context.Context, _ string, _ ...string) (string, error) {
+		return execCommand(ctx, "sleep", "5")
+	}
+	for i := 0; i < 2; i++ {
+		_, _ = s.Sync(context.Background(), "home")
+	}
+	st := s.Status()["home"]
+	if st.Failures != 0 || !st.NextRetry.IsZero() || !strings.Contains(st.LastError, "deadline") {
+		t.Fatalf("a killed mbsync must record as a deadline, not a failure: %+v", st)
+	}
+}
+
+func TestWaitReturnsOnCancelledContext(t *testing.T) {
+	s, release, entered := blockingSyncer(t, 1)
+	go func() { _, _ = s.Sync(context.Background(), "home") }()
+	<-entered
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	start := time.Now()
+	if s.Wait(ctx, time.Minute) {
+		t.Fatal("Wait reported done while the pass was still running")
+	}
+	if time.Since(start) > time.Second {
+		t.Fatal("Wait ignored the cancelled context")
+	}
+	close(release)
+	if !s.Wait(context.Background(), time.Second) {
+		t.Fatal("Wait did not return done after the pass finished")
+	}
+}
+
+func TestKickNeverBlocks(t *testing.T) {
+	s, _ := testSyncer(t)
+	// Nobody is draining the channel; a second kick must not wedge refresh.
+	s.Kick()
+	s.Kick()
+	select {
+	case <-s.kick:
+	default:
+		t.Fatal("a kick was dropped instead of queued")
+	}
+}
+
 func TestSyncIsSerialisedPerAccount(t *testing.T) {
 	s, _ := testSyncer(t)
 	release := make(chan struct{})
