@@ -32,6 +32,14 @@ type AccountStatus struct {
 	// account ignores both.
 	Failures  int
 	NextRetry time.Time
+	// Running, StartedAt and LastDuration let a client that asked for a
+	// refresh and got "in progress" decide how long to wait.
+	Running      bool
+	StartedAt    time.Time
+	LastDuration time.Duration
+	// Complete is set the first time the full channel exits 0 within
+	// SYNC_TIMEOUT, and never unset.
+	Complete bool
 }
 
 // genNotmuchConfig writes the index configuration. mail_root points at the
@@ -55,10 +63,15 @@ synchronize_flags=true
 `, index, maildir)
 }
 
-// genMbsyncrc writes one channel per account. The file is generated rather than
-// mounted for two reasons: the four read-only directives cannot be edited into
-// something that pushes, and a stray blank line cannot silently demote them to
-// global options.
+// channelTail closes every generated channel. The first four lines are the
+// read-only guarantee; they must appear once per channel, and the directive
+// test counts them.
+const channelTail = "Sync Pull\nCreate Near\nRemove None\nExpunge None\nSyncState *\nCopyArrivalDate yes\n"
+
+// genMbsyncrc writes two channels per account. The file is generated rather
+// than mounted for two reasons: the four read-only directives cannot be edited
+// into something that pushes, and a stray blank line cannot silently demote
+// them to global options.
 //
 // The password is written into the file. The file lives on the ordinary
 // container filesystem, in a directory only this process writes to, at mode
@@ -109,7 +122,7 @@ func genMbsyncrc(cfg *Config, maildir string) string {
 		// server's delimiter itself.
 		b.WriteString("SubFolders Verbatim\n")
 
-		b.WriteString("\nChannel " + a.Name + "\n")
+		b.WriteString("\nChannel " + a.Name + "-full\n")
 		b.WriteString("Far :" + a.Name + "-remote:\n")
 		b.WriteString("Near :" + a.Name + "-local:\n")
 		pats := make([]string, len(a.Patterns))
@@ -118,12 +131,31 @@ func genMbsyncrc(cfg *Config, maildir string) string {
 		}
 		b.WriteString("Patterns " + strings.Join(pats, " ") + "\n")
 		// The read-only guarantee. Do not add a blank line above this comment.
-		b.WriteString("Sync Pull\n")
-		b.WriteString("Create Near\n")
-		b.WriteString("Remove None\n")
-		b.WriteString("Expunge None\n")
-		b.WriteString("SyncState *\n")
-		b.WriteString("CopyArrivalDate yes\n")
+		b.WriteString(channelTail)
+
+		// A second, small channel so today's mail is searchable within
+		// minutes of a first run, while the full mirror takes as long as
+		// the provider's quota allows. MaxMessages fetches only the newest
+		// UIDs and ignores the rest; notmuch merges the overlap by
+		// Message-ID once the full channel catches up. Expiry under
+		// MaxMessages is near-side only and Expunge None keeps even that
+		// from deleting a file.
+		recentLocal := filepath.Join(maildir, a.Name+"-recent") + string(filepath.Separator)
+		b.WriteString("\nMaildirStore " + a.Name + "-recent-local\n")
+		b.WriteString("Path " + recentLocal + "\n")
+		b.WriteString("Inbox " + filepath.Join(recentLocal, "INBOX") + "\n")
+		b.WriteString("SubFolders Verbatim\n")
+		b.WriteString("\nChannel " + a.Name + "-recent\n")
+		b.WriteString("Far :" + a.Name + "-remote:\n")
+		b.WriteString("Near :" + a.Name + "-recent-local:\n")
+		b.WriteString("Patterns \"INBOX\"\n")
+		b.WriteString("MaxMessages 1000\n")
+		// Without this, mbsync refuses to apply the cap to a mailbox holding
+		// more unread messages than it and skips the mailbox outright, which
+		// a real INBOX with a thousand unread mails does on day one. Expiry
+		// is still near-side only, and Expunge None keeps it from deleting.
+		b.WriteString("ExpireUnread yes\n")
+		b.WriteString(channelTail)
 	}
 	return b.String()
 }
@@ -182,7 +214,7 @@ type Syncer struct {
 	// the normal cadence, capped at an hour, instead of hammered every tick.
 	interval time.Duration
 
-	runCmd  func(ctx context.Context, name string, args ...string) error
+	runCmd  func(ctx context.Context, name string, args ...string) (string, error)
 	reindex func(ctx context.Context) (int, error)
 	// mountPoint defaults to the package-level isMountPoint; overridden in
 	// tests, since a real mount point is not reproducible in one.
@@ -199,6 +231,27 @@ type Syncer struct {
 
 	mu     sync.Mutex
 	status map[string]AccountStatus
+	// done is closed when the pass in flight finishes; nil when none is.
+	// Wait uses it so a refresh that arrives mid-pass joins rather than
+	// starts another. Guarded by mu.
+	done chan struct{}
+	// inflight counts the Sync calls sharing done. Guarded by mu.
+	inflight int
+	// kick is read by the ticker loop in run() to reset its schedule after
+	// a manual refresh. Buffered so Kick never blocks.
+	kick chan struct{}
+}
+
+// execCommand is the real runCmd: one process, its combined output, and an
+// error that carries that output. Kept as a named function so a test can
+// run it against a real process and check what a killed one looks like.
+func execCommand(ctx context.Context, name string, args ...string) (string, error) {
+	cmd := exec.CommandContext(ctx, name, args...)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return string(out), fmt.Errorf("%s: %w: %s", name, err, strings.TrimSpace(string(out)))
+	}
+	return string(out), nil
 }
 
 func newSyncer(cfg *Config, maildir, index, mbsyncConfig string, nm *Notmuch) *Syncer {
@@ -210,16 +263,10 @@ func newSyncer(cfg *Config, maildir, index, mbsyncConfig string, nm *Notmuch) *S
 		timeout:      time.Hour,
 		interval:     10 * time.Minute,
 		accountLocks: accountLocks(cfg),
+		kick:         make(chan struct{}, 1),
 		mountPoint:   isMountPoint,
 		status:       map[string]AccountStatus{},
-		runCmd: func(ctx context.Context, name string, args ...string) error {
-			cmd := exec.CommandContext(ctx, name, args...)
-			out, err := cmd.CombinedOutput()
-			if err != nil {
-				return fmt.Errorf("%s: %w: %s", name, err, strings.TrimSpace(string(out)))
-			}
-			return nil
-		},
+		runCmd:       execCommand,
 		reindex: func(ctx context.Context) (int, error) {
 			// A missing database is the normal state on a first run: notmuch
 			// new is what creates it. The count is only here to report how
@@ -241,20 +288,45 @@ func newSyncer(cfg *Config, maildir, index, mbsyncConfig string, nm *Notmuch) *S
 	}
 }
 
-// Sync mirrors one account (or all of them, when account is "") and reindexes
-// once. A failing account is recorded and skipped rather than aborting the
+// Sync mirrors every folder of one account (or of all of them, when account
+// is "") and reindexes once. A failing account is recorded and skipped rather than aborting the
 // pass: with several accounts configured, one expired password must not stop
 // the rest.
-func (s *Syncer) Sync(ctx context.Context, account, folder string) (int, error) {
+func (s *Syncer) Sync(ctx context.Context, account string) (int, error) {
 	if err := s.checkInitialised(); err != nil {
 		return 0, err
 	}
 
+	// The pass in flight is one channel, whichever call started it, so a
+	// second caller that arrives mid-pass waits for the same finish rather
+	// than starting another. inflight counts the calls holding it, and only
+	// the last one out closes it. A count rather than a single owner
+	// because two things break otherwise: a call refused with errSyncBusy
+	// below would close the channel of the pass it collided with, and an
+	// owner that finishes first would report done while a slower pass on
+	// another account, started later, is still downloading.
+	s.mu.Lock()
+	if s.done == nil {
+		s.done = make(chan struct{})
+	}
+	done := s.done
+	s.inflight++
+	s.mu.Unlock()
+	defer func() {
+		s.mu.Lock()
+		s.inflight--
+		if s.inflight == 0 {
+			close(done)
+			s.done = nil
+		}
+		s.mu.Unlock()
+	}()
+
 	var (
-		wg                sync.WaitGroup
-		resMu             sync.Mutex
-		attempted, failed int
-		lastErr           error
+		wg                      sync.WaitGroup
+		resMu                   sync.Mutex
+		attempted, failed, busy int
+		lastErr                 error
 	)
 	for _, a := range s.cfg.Accounts {
 		if account != "" && a.Name != account {
@@ -280,14 +352,20 @@ func (s *Syncer) Sync(ctx context.Context, account, folder string) (int, error) 
 			if account != "" {
 				return 0, errSyncBusy
 			}
+			busy++
 			continue
 		}
 		wg.Add(1)
 		go func(a Account) {
 			defer wg.Done()
 			defer lock.Unlock()
-			err := s.syncAccount(ctx, a.Name, folder)
-			s.record(a.Name, err)
+			s.mu.Lock()
+			st := s.status[a.Name]
+			st.Running, st.StartedAt = true, time.Now()
+			s.status[a.Name] = st
+			s.mu.Unlock()
+			out, err := s.syncAccount(ctx, a.Name)
+			s.record(a.Name, out, err)
 			resMu.Lock()
 			defer resMu.Unlock()
 			attempted++
@@ -321,25 +399,58 @@ func (s *Syncer) Sync(ctx context.Context, account, folder string) (int, error) 
 	if attempted > 0 && failed == attempted {
 		return 0, lastErr
 	}
+	// Every eligible account was already syncing, so this pass ran nothing
+	// of its own. Report that the same way a named busy account does: a
+	// refresh then joins the pass in flight, instead of reporting the zero
+	// this pass would otherwise return while a first mirror is 3% done. The
+	// ticker ignores errSyncBusy, so its skip-and-continue is unchanged.
+	if attempted == 0 && busy > 0 {
+		return 0, errSyncBusy
+	}
 	return added, reindexErr
 }
 
-// syncAccount runs one mbsync for one account under its own deadline, so a
+// syncAccount runs mbsync for one account under its own deadline, so a
 // provider that stops responding mid-sync cannot stall anything but itself.
-func (s *Syncer) syncAccount(ctx context.Context, name, folder string) error {
+//
+// It is two invocations, recent then full, not the single Group of both that
+// an earlier version used: mbsync returns a Group's exit code for the whole
+// group, so a failing recent channel would have hidden a succeeding full
+// channel behind a non-nil error and Complete would never be set. Running
+// them separately means a failed recent channel is just logged; only full's
+// result decides completion.
+func (s *Syncer) syncAccount(ctx context.Context, name string) (string, error) {
 	// mbsync creates mailboxes inside a store, but not the store's own
 	// root, so a first run against a fresh volume fails with "cannot open
-	// store" until this directory exists.
-	if err := os.MkdirAll(filepath.Join(s.maildir, name), 0o700); err != nil {
-		return err
-	}
-	target := name
-	if folder != "" {
-		target = name + ":" + folder
+	// store" until the directory exists. The recent channel is a second
+	// store and needs its own.
+	for _, dir := range []string{name, name + "-recent"} {
+		if err := os.MkdirAll(filepath.Join(s.maildir, dir), 0o700); err != nil {
+			return "", err
+		}
 	}
 	accountCtx, cancel := context.WithTimeout(ctx, s.timeout)
 	defer cancel()
-	return s.runCmd(accountCtx, "mbsync", "-c", s.mbsyncConfig, target)
+	// The recent channel exists to make today's mail searchable while the
+	// full mirror is still filling. Once full has completed it covers
+	// everything recent could, so the extra login per pass buys nothing.
+	s.mu.Lock()
+	complete := s.status[name].Complete
+	s.mu.Unlock()
+	if !complete {
+		if _, err := s.runCmd(accountCtx, "mbsync", "-c", s.mbsyncConfig, name+"-recent"); err != nil {
+			fmt.Fprintf(os.Stderr, "sync: account %s: recent: %v\n", name, err)
+		}
+	}
+	out, err := s.runCmd(accountCtx, "mbsync", "-c", s.mbsyncConfig, name+"-full")
+	if err != nil && accountCtx.Err() != nil && ctx.Err() == nil {
+		// exec kills mbsync when the deadline passes, so what comes back is
+		// an ExitError reading "signal: killed", never the context error.
+		// Translate it, or record cannot tell an interrupted download from
+		// a provider refusing, and backs off a mirror that was working.
+		return out, fmt.Errorf("sync deadline %s reached: %w", s.timeout, context.DeadlineExceeded)
+	}
+	return out, err
 }
 
 // markMirrored records, in the index directory, that a mirror exists at
@@ -398,10 +509,25 @@ func (s *Syncer) checkInitialised() error {
 	return fmt.Errorf("maildir %s is an empty plain directory, not a mount point: refusing to sync, since a path whose volume was never mounted looks exactly like this and would trigger a full re-download. Mount the storage there, or set INIT_MIRROR=1 if it really is meant to be a directory on this filesystem", s.maildir)
 }
 
-func (s *Syncer) record(account string, err error) {
+// record updates one account's status after a pass. out is unused today
+// beyond what runCmd already folded into err's message; kept in the
+// signature for a later caller that wants it (mbsync only prints its
+// pulled/total counter to a console, so out never carries one here; see
+// the design spec's "Fresh mail first").
+func (s *Syncer) record(account, out string, err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	st := s.status[account]
+	st.Running = false
+	st.LastDuration = time.Since(st.StartedAt)
+	if errors.Is(err, context.DeadlineExceeded) {
+		// SYNC_TIMEOUT expired mid-download. That is progress interrupted,
+		// not a refusal: mbsync journals per message, and the next pass
+		// resumes. Backing off here would halve a multi-day first mirror.
+		st.LastError = "sync deadline reached; will resume next pass"
+		s.status[account] = st
+		return
+	}
 	if err != nil {
 		st.LastError = err.Error()
 		st.Failures++
@@ -424,6 +550,7 @@ func (s *Syncer) record(account string, err error) {
 		st.LastSync = time.Now()
 		st.Failures = 0
 		st.NextRetry = time.Time{}
+		st.Complete = true
 	}
 	s.status[account] = st
 }
@@ -446,6 +573,34 @@ func (s *Syncer) Busy() bool {
 		l.Unlock()
 	}
 	return false
+}
+
+// Wait blocks up to d for the pass in flight. Returns true when no pass is
+// running by the time it returns, false when one still is.
+func (s *Syncer) Wait(ctx context.Context, d time.Duration) bool {
+	s.mu.Lock()
+	done := s.done
+	s.mu.Unlock()
+	if done == nil {
+		return true
+	}
+	select {
+	case <-done:
+		return true
+	case <-time.After(d):
+		return false
+	case <-ctx.Done():
+		return false
+	}
+}
+
+// Kick asks the ticker loop to restart its interval from now, so a manual
+// refresh is not followed by a scheduled pass moments later.
+func (s *Syncer) Kick() {
+	select {
+	case s.kick <- struct{}{}:
+	default:
+	}
 }
 
 // Status returns a copy of the per-account sync state, safe to read while a

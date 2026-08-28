@@ -2,11 +2,17 @@ package main
 
 import (
 	"context"
+	"errors"
+	"io"
+	"net"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 func writeConfig(t *testing.T, body string) string {
@@ -87,6 +93,21 @@ func TestLoadConfigExpandsSpecialCharactersSafely(t *testing.T) {
 	}
 }
 
+func TestLoadConfigAllowsMissingFileAndNoAccounts(t *testing.T) {
+	cfg, err := loadConfig(filepath.Join(t.TempDir(), "absent.json"))
+	if err != nil || len(cfg.Accounts) != 0 {
+		t.Fatalf("missing file: cfg=%v err=%v", cfg, err)
+	}
+	p := filepath.Join(t.TempDir(), "empty.json")
+	if err := os.WriteFile(p, []byte(`{"accounts":[]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err = loadConfig(p)
+	if err != nil || len(cfg.Accounts) != 0 {
+		t.Fatalf("empty list: cfg=%v err=%v", cfg, err)
+	}
+}
+
 func TestLoadConfigRejectsBadInput(t *testing.T) {
 	cases := map[string]struct{ body, want string }{
 		"duplicate names": {
@@ -110,10 +131,6 @@ func TestLoadConfigRejectsBadInput(t *testing.T) {
 			`{"accounts":[{"name":"a","host":"h","user":"u","password":"p","tls":"wat"}]}`,
 			"tls",
 		},
-		"no accounts": {
-			`{"accounts":[]}`,
-			"no accounts",
-		},
 		"space in host": {
 			`{"accounts":[{"name":"a","host":"imap gmail.com","user":"u","password":"p"}]}`,
 			"host",
@@ -121,6 +138,10 @@ func TestLoadConfigRejectsBadInput(t *testing.T) {
 		"tab in user": {
 			`{"accounts":[{"name":"a","host":"h","user":"me@example.com\ttab","password":"p"}]}`,
 			"user",
+		},
+		"name reserved for the recent maildir": {
+			`{"accounts":[{"name":"work-recent","host":"h","user":"u","password":"p"}]}`,
+			"-recent",
 		},
 		"space in user": {
 			`{"accounts":[{"name":"a","host":"h","user":"me user","password":"p"}]}`,
@@ -197,6 +218,29 @@ func TestRefreshExclusionsLeavesGoodListOnFailedDiscovery(t *testing.T) {
 func TestDiscoveryIntervalIsMuchLongerThanSync(t *testing.T) {
 	if discoveryInterval < time.Hour {
 		t.Errorf("discoveryInterval = %v, want at least 1h so discovery does not add an IMAP login on every sync tick", discoveryInterval)
+	}
+}
+
+func TestResettableTickerRestartsOnKick(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	kick := make(chan struct{}, 1)
+	ticks := make(chan struct{}, 8)
+	go runResettableTicker(ctx, 300*time.Millisecond, kick, func(context.Context) { ticks <- struct{}{} })
+
+	// Kick at 200ms: without the reset the first tick lands at 300ms, with
+	// it at 500ms. Check at 400ms, which is clear of both by 100ms.
+	time.Sleep(200 * time.Millisecond)
+	kick <- struct{}{}
+	select {
+	case <-ticks:
+		t.Fatal("a kick did not push the next tick out")
+	case <-time.After(200 * time.Millisecond):
+	}
+	select {
+	case <-ticks:
+	case <-time.After(2 * time.Second):
+		t.Fatal("ticker did not fire after the reset interval")
 	}
 }
 
@@ -282,5 +326,260 @@ func TestLoadEnvAcceptsAndAppliesSyncTimeout(t *testing.T) {
 	}
 	if e.SyncTimeout != 30*time.Minute {
 		t.Errorf("SyncTimeout = %v, want 30m", e.SyncTimeout)
+	}
+}
+
+// dialSocket connects to a socket that serveSocket is still bringing up.
+func dialSocket(t *testing.T, sock string) net.Conn {
+	t.Helper()
+	var conn net.Conn
+	var err error
+	for i := 0; i < 50; i++ {
+		if conn, err = net.Dial("unix", sock); err == nil {
+			return conn
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("socket never came up: %v", err)
+	return nil
+}
+
+func TestServeSocketAnswersToolsList(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	sock := filepath.Join(t.TempDir(), "mcp.sock")
+	m := mcp.NewServer(&mcp.Implementation{Name: "t", Version: "0"}, nil)
+	newServer(&Config{}, nil, t.TempDir()).registerTools(m)
+	go func() { _ = serveSocket(ctx, sock, m) }()
+	conn := dialSocket(t, sock)
+	defer conn.Close()
+	c := mcp.NewClient(&mcp.Implementation{Name: "c", Version: "0"}, nil)
+	sess, err := c.Connect(ctx, &mcp.IOTransport{Reader: conn, Writer: conn}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sess.Close()
+	res, err := sess.ListTools(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Tools) != 11 {
+		t.Fatalf("want 11 tools over the socket, got %d", len(res.Tools))
+	}
+
+	// IOTransport does not propagate ctx cancellation on its own, so
+	// serveSocket has to close each session explicitly on shutdown.
+	// Cancelling here should make the client observe the connection
+	// closing shortly after, not only when the test process exits.
+	cancel()
+	waitDone := make(chan error, 1)
+	go func() { waitDone <- sess.Wait() }()
+	select {
+	case <-waitDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("client session Wait did not return within 2s of ctx cancellation")
+	}
+}
+
+// TestServeSocketReleasesTheSessionWatcher covers the watcher goroutine each
+// connection starts to close its session on shutdown. It used to park on
+// ctx.Done with nothing else to wake it, so every client that connected and
+// left cost the daemon one live goroutine and one retained session for the
+// rest of the process's life. Goroutine count is the only observable here,
+// so the test dials many times and waits for the count to come back down.
+func TestServeSocketReleasesTheSessionWatcher(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	// Not t.TempDir(): its path carries the test's name, and a socket path
+	// over 104 bytes fails to connect with EINVAL on macOS.
+	dir, err := os.MkdirTemp("", "ymm")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	sock := filepath.Join(dir, "mcp.sock")
+	m := mcp.NewServer(&mcp.Implementation{Name: "t", Version: "0"}, nil)
+	newServer(&Config{}, nil, t.TempDir()).registerTools(m)
+	go func() { _ = serveSocket(ctx, sock, m) }()
+
+	dialAndLeave := func() { dialSocket(t, sock).Close() }
+
+	// One connection first, so the SDK's own one-time goroutines are already
+	// running when the baseline is taken.
+	dialAndLeave()
+	time.Sleep(100 * time.Millisecond)
+	base := runtime.NumGoroutine()
+
+	const clients = 20
+	for i := 0; i < clients; i++ {
+		dialAndLeave()
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for runtime.NumGoroutine() > base+clients/2 && time.Now().Before(deadline) {
+		time.Sleep(20 * time.Millisecond)
+	}
+	if got := runtime.NumGoroutine(); got > base+clients/2 {
+		t.Fatalf("%d goroutines after %d clients came and went, baseline was %d", got, clients, base)
+	}
+}
+
+func TestBridgeCopiesBothWays(t *testing.T) {
+	sock := filepath.Join(t.TempDir(), "mcp.sock")
+	l, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer l.Close()
+	go func() {
+		c, err := l.Accept()
+		if err != nil {
+			return
+		}
+		defer c.Close()
+		buf := make([]byte, 5)
+		_, _ = io.ReadFull(c, buf)
+		_, _ = c.Write([]byte("echo:" + string(buf)))
+	}()
+	inR, inW := io.Pipe()
+	outR, outW := io.Pipe()
+	done := make(chan error, 1)
+	go func() { done <- bridgeIO(context.Background(), sock, inR, outW) }()
+	_, _ = inW.Write([]byte("hello"))
+	got := make([]byte, 10)
+	if _, err := io.ReadFull(outR, got); err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "echo:hello" {
+		t.Fatalf("got %q", got)
+	}
+	inW.Close()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestBridgeIOEndsOnContextCancel covers the fix for a Ctrl-C during a
+// bridge session being swallowed: main() registers a signal handler for
+// every mode, which suppresses the runtime's default terminate-on-SIGINT
+// behavior, so bridge must itself react to ctx to let the user break out.
+// Nothing here ever closes the input pipe or writes a reply, so the only
+// thing that can end bridgeIO is the context cancellation.
+func TestBridgeIOEndsOnContextCancel(t *testing.T) {
+	sock := filepath.Join(t.TempDir(), "mcp.sock")
+	l, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer l.Close()
+	go func() {
+		c, err := l.Accept()
+		if err != nil {
+			return
+		}
+		defer c.Close()
+		_, _ = io.Copy(io.Discard, c)
+	}()
+	ctx, cancel := context.WithCancel(context.Background())
+	inR, _ := io.Pipe()
+	outR, outW := io.Pipe()
+	go io.Copy(io.Discard, outR)
+	done := make(chan error, 1)
+	go func() { done <- bridgeIO(ctx, sock, inR, outW) }()
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("bridgeIO returned %v, want nil on ctx cancellation", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("bridgeIO did not return within 2s of ctx cancellation")
+	}
+}
+
+// TestStdioSessionEOFCancelsSharedContext covers the fix for stdio mode not
+// exiting on stdin EOF when PUBLIC_URL is set: run() used to shadow ctx
+// inside the `if stdio` block with its own child context, so the HTTP
+// shutdown goroutine further down (which reads the outer ctx) never saw the
+// stdio session end. startStdioSession is the extracted piece: it must
+// cancel the shared context whenever the session's transport ends, which is
+// exactly what a real "docker run -i" client hitting EOF looks like at the
+// SDK level. There is no listener on PublicURL here (run() itself needs
+// mbsync/notmuch and a real HTTP port to exercise end to end), so this
+// exercises the cancellation wiring directly with an IOTransport standing
+// in for stdin.
+// TestBridgeReportsNoDaemonForStaleSocket covers a stale mcp.sock left by an
+// unclean exit. main picks bridge mode on the file existing, so without a
+// distinguishable dial failure "stdio" would exit 1 with "connection
+// refused" until someone deleted the file by hand. This checks the error
+// main keys off; the recovery itself (run(ctx, true), whose serveSocket
+// removes the stale file before listening) needs mbsync and notmuch, so it
+// is not exercised here.
+func TestBridgeReportsNoDaemonForStaleSocket(t *testing.T) {
+	sock := filepath.Join(t.TempDir(), "mcp.sock")
+	if err := os.WriteFile(sock, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	err := bridgeIO(context.Background(), sock, strings.NewReader(""), io.Discard)
+	if !errors.Is(err, errNoDaemon) {
+		t.Fatalf("bridgeIO on a stale socket returned %v, want an errNoDaemon", err)
+	}
+}
+
+func TestStdioSessionEOFCancelsSharedContext(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	m := mcp.NewServer(&mcp.Implementation{Name: "t", Version: "0"}, nil)
+	inR, inW := io.Pipe()
+	outR, outW := io.Pipe()
+	go io.Copy(io.Discard, outR)
+	startStdioSession(ctx, cancel, m, &mcp.IOTransport{Reader: inR, Writer: outW})
+	inW.Close()
+	select {
+	case <-ctx.Done():
+	case <-time.After(2 * time.Second):
+		t.Fatal("shared ctx was not cancelled within 2s of the stdio transport's input closing")
+	}
+}
+
+// TestRefreshPassOutlivesTheToolCall covers the context the refresh tool's
+// pass runs under. The MCP SDK cancels a tool handler's context as soon as
+// the handler returns, and refresh returns after refreshWait while the pass
+// keeps going, so a pass wired to the request context would have its mbsync
+// killed mid-download every time refresh reported "in progress".
+func TestRefreshPassOutlivesTheToolCall(t *testing.T) {
+	s, _ := testSyncer(t)
+	// Whether mbsync's own context was still live when it was about to run.
+	// Written by the per-account goroutine, read after Sync's wg.Wait.
+	var ran bool
+	var passErr error
+	s.runCmd = func(ctx context.Context, _ string, _ ...string) (string, error) {
+		ran, passErr = true, ctx.Err()
+		return "", nil
+	}
+
+	request, cancel := context.WithCancel(context.Background())
+	cancel() // what the SDK does the moment the handler returns
+	if _, err := detachedSync(context.Background(), s)(request, "home"); err != nil {
+		t.Fatal(err)
+	}
+	if !ran {
+		t.Fatal("the pass never ran")
+	}
+	if passErr != nil {
+		t.Fatalf("mbsync ran under the cancelled tool-call context: %v", passErr)
+	}
+}
+
+// A set PUBLIC_URL with no passphrase must be refused before run touches a
+// provider, so a misconfigured restart loop never logs in to an account.
+func TestRunRefusesPublicURLWithoutPassphrase(t *testing.T) {
+	t.Setenv("CONFIG", filepath.Join(t.TempDir(), "missing.json"))
+	t.Setenv("MAILDIR", t.TempDir())
+	t.Setenv("INDEX", t.TempDir())
+	t.Setenv("PUBLIC_URL", "https://mail.example.com")
+	t.Setenv("OAUTH_PASSPHRASE", "")
+	err := run(context.Background(), false)
+	if err == nil || !strings.Contains(err.Error(), "OAUTH_PASSPHRASE") {
+		t.Fatalf("want the passphrase refusal, got %v", err)
 	}
 }

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -70,15 +71,17 @@ func expandBracedEnv(s string) string {
 // JSON, only a valid Go string.
 func loadConfig(path string) (*Config, error) {
 	raw, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		// No accounts file is a legal way to start: the server answers every
+		// tool and status explains what to configure.
+		return &Config{}, nil
+	}
 	if err != nil {
 		return nil, fmt.Errorf("accounts file: %w", err)
 	}
 	var cfg Config
 	if err := json.Unmarshal(raw, &cfg); err != nil {
 		return nil, fmt.Errorf("accounts file: %w", err)
-	}
-	if len(cfg.Accounts) == 0 {
-		return nil, fmt.Errorf("accounts file: no accounts defined")
 	}
 	seen := map[string]bool{}
 	for i := range cfg.Accounts {
@@ -96,6 +99,12 @@ func loadConfig(path string) (*Config, error) {
 		}
 		if a.Name == "" || strings.ContainsAny(a.Name, `/\ "'`) {
 			return nil, fmt.Errorf("account %d: name must be non-empty and free of spaces, quotes and slashes", i)
+		}
+		// Each account owns two maildirs, <name> and <name>-recent, so an
+		// account literally called "x-recent" would share a directory with
+		// account "x" and answer x's account-scoped queries with its mail.
+		if strings.HasSuffix(a.Name, "-recent") {
+			return nil, fmt.Errorf("account %q: a name may not end in -recent; that is the directory of account %q's recent mail", a.Name, strings.TrimSuffix(a.Name, "-recent"))
 		}
 		if seen[a.Name] {
 			return nil, fmt.Errorf("account %q: duplicate name", a.Name)
@@ -254,6 +263,24 @@ func refreshExclusions(ctx context.Context, cfg *Config, srv *Server) {
 // runTicker calls fn every interval until ctx is cancelled. It does not fire
 // overlapping passes itself; fn (the syncer) is responsible for refusing a
 // concurrent run, since the ticker has no way to know how long fn will take.
+// runResettableTicker is runTicker with a kick: a receive on kick restarts
+// the interval from now, so a pass asked for by hand is not followed by a
+// scheduled one moments later.
+func runResettableTicker(ctx context.Context, every time.Duration, kick <-chan struct{}, fn func(context.Context)) {
+	t := time.NewTicker(every)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-kick:
+			t.Reset(every)
+		case <-t.C:
+			fn(ctx)
+		}
+	}
+}
+
 func runTicker(ctx context.Context, every time.Duration, fn func(context.Context)) {
 	t := time.NewTicker(every)
 	defer t.Stop()
@@ -267,14 +294,116 @@ func runTicker(ctx context.Context, every time.Duration, fn func(context.Context
 	}
 }
 
+// detachedSync returns the entry point the refresh tool calls to start a
+// pass. The pass outlives the tool call that asked for it, since refresh
+// waits refreshWait and then reports that it is still running, so it runs
+// under base, the process context, and ignores the request context it is
+// handed. The SDK cancels a handler's context the moment the handler
+// returns, and mbsync runs under that context, so without this every refresh
+// that reported "in progress" would kill the download it had just started.
+// Shutdown still stops it: base is cancelled with the process.
+func detachedSync(base context.Context, s *Syncer) func(context.Context, string) (int, error) {
+	return func(_ context.Context, account string) (int, error) { return s.Sync(base, account) }
+}
+
+// serveSocket accepts local MCP sessions on a Unix socket. Each connection is
+// one session on the shared server, so it sees the same tools and the same
+// syncer as HTTP. There is no auth on the socket: reaching it means running
+// a process inside the container, which is the boundary.
+func serveSocket(ctx context.Context, path string, m *mcp.Server) error {
+	_ = os.Remove(path)
+	l, err := net.Listen("unix", path)
+	if err != nil {
+		return err
+	}
+	defer os.Remove(path)
+	go func() {
+		<-ctx.Done()
+		l.Close()
+	}()
+	for {
+		conn, err := l.Accept()
+		if err != nil {
+			if ctx.Err() != nil {
+				return nil
+			}
+			return err
+		}
+		go func() {
+			defer conn.Close()
+			sess, err := m.Connect(ctx, &mcp.IOTransport{Reader: conn, Writer: conn}, nil)
+			if err != nil {
+				return
+			}
+			// IOTransport does not propagate ctx cancellation into the
+			// session (only a carrier like a one-shot HTTP request does),
+			// so shutdown is driven here instead: closing the session
+			// unblocks Wait below. done is what retires the watcher when
+			// the session ends on its own, so a client that comes and goes
+			// does not leave a goroutine and its session behind.
+			done := make(chan struct{})
+			go func() {
+				select {
+				case <-ctx.Done():
+					_ = sess.Close()
+				case <-done:
+				}
+			}()
+			sess.Wait()
+			close(done)
+		}()
+	}
+}
+
+// startStdioSession runs an MCP session over transport in the background and
+// cancels the shared run() context when the session ends, whatever the
+// reason: transport EOF, a transport error, or ctx being cancelled from
+// elsewhere. That cancellation is what lets a stdio client's disconnect end
+// the whole process, even when PublicURL is set and the HTTP listener would
+// otherwise have kept it running.
+func startStdioSession(ctx context.Context, cancel context.CancelFunc, m *mcp.Server, transport mcp.Transport) {
+	go func() {
+		defer cancel()
+		_ = m.Run(ctx, transport)
+	}()
+}
+
 func main() {
-	if err := run(); err != nil {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	// "serve" is the daemon. Anything else, including no argument, is stdio,
+	// so a bare "docker run -i image" speaks MCP on stdin, which is what
+	// every client and directory expects.
+	sock := filepath.Join(os.Getenv("INDEX"), "mcp.sock")
+	_, statErr := os.Stat(sock)
+	var err error
+	switch {
+	case len(os.Args) > 1 && os.Args[1] == "serve":
+		err = run(ctx, false)
+	case statErr == nil:
+		// A stale socket file is indistinguishable from a live daemon until
+		// the dial fails. run's serveSocket removes the file before
+		// listening, so taking over as the daemon is what heals it.
+		if err = bridgeIO(ctx, sock, os.Stdin, os.Stdout); errors.Is(err, errNoDaemon) {
+			err = run(ctx, true)
+		}
+	default:
+		err = run(ctx, true)
+	}
+	if err != nil {
 		fmt.Fprintln(os.Stderr, "your-mail-mcp:", err)
 		os.Exit(1)
 	}
 }
 
-func run() error {
+func run(ctx context.Context, stdio bool) error {
+	// One cancellable context for the whole run, shared by every goroutine
+	// below including, when stdio is true, the HTTP shutdown goroutine
+	// further down: stdin closing must be able to end the process even when
+	// PublicURL is set, not just the local part of it.
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
 	e, err := loadEnv()
 	if err != nil {
 		return err
@@ -307,20 +436,22 @@ func run() error {
 
 	srv := newServer(cfg, nm, e.Maildir)
 	srv.publicURL = strings.TrimSuffix(e.PublicURL, "/")
-	srv.sync = syncer.Sync
+	srv.index = e.Index
+	srv.sync = detachedSync(ctx, syncer)
+	srv.syncWait = syncer.Wait
+	srv.syncKick = syncer.Kick
 	srv.status = syncer.Status
 	srv.syncBusy = syncer.Busy
 	syncer.interval = e.SyncInterval
 
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
-
-	// Built before the discovery loop below: a missing OAUTH_PASSPHRASE or
-	// PUBLIC_URL should exit the process immediately, not after logging in
-	// to every configured account first.
-	o, err := newOAuth(filepath.Join(e.Index, "oauth.json"), e.PublicURL, e.Passphrase)
-	if err != nil {
-		return err
+	// Built before any goroutine touches a provider: a missing
+	// OAUTH_PASSPHRASE must exit the process now, not after logging in to
+	// every configured account first.
+	var o *oauthServer
+	if e.PublicURL != "" {
+		if o, err = newOAuth(filepath.Join(e.Index, "oauth.json"), e.PublicURL, e.Passphrase); err != nil {
+			return err
+		}
 	}
 
 	// Config-tier exclusions touch no network, so they are applied inline
@@ -339,7 +470,7 @@ func run() error {
 	})
 
 	sync := func(ctx context.Context) {
-		if _, err := syncer.Sync(ctx, "", ""); err != nil && !errors.Is(err, errSyncBusy) {
+		if _, err := syncer.Sync(ctx, ""); err != nil && !errors.Is(err, errSyncBusy) {
 			fmt.Fprintln(os.Stderr, "sync:", err)
 		}
 	}
@@ -349,11 +480,40 @@ func run() error {
 	// goroutine because a first mirror of a large mailbox takes far longer
 	// than the listener should wait to open.
 	go sync(ctx)
-	go runTicker(ctx, e.SyncInterval, sync)
+	// Not runTicker: a manual refresh resets the schedule, so that a pass
+	// asked for by hand is not followed by a scheduled one moments later.
+	go runResettableTicker(ctx, e.SyncInterval, syncer.kick, sync)
 
-	m := mcp.NewServer(&mcp.Implementation{Name: "your-mail-mcp", Version: "0.2.0"}, nil)
+	m := mcp.NewServer(&mcp.Implementation{Name: "your-mail-mcp", Version: "0.3.0"}, nil)
 	srv.registerTools(m)
 
+	sock := filepath.Join(e.Index, "mcp.sock")
+	// serveSocket removes the socket when it returns, but that is a
+	// goroutine racing process exit; removing it here as well means a clean
+	// shutdown never leaves a file for the next start to dial into.
+	defer os.Remove(sock)
+	go func() {
+		if err := serveSocket(ctx, sock, m); err != nil {
+			fmt.Fprintln(os.Stderr, "socket:", err)
+		}
+	}()
+
+	if stdio {
+		// stdin is one more session. When the client closes it, the whole
+		// process goes: a daemon that outlives its client is the orphan bug
+		// every stdio server ships. startStdioSession cancels the shared ctx
+		// above, so this reaches the HTTP shutdown goroutine too when
+		// PublicURL is set.
+		startStdioSession(ctx, cancel, m, &mcp.StdioTransport{})
+	}
+
+	if e.PublicURL == "" {
+		if !stdio {
+			fmt.Fprintln(os.Stderr, "PUBLIC_URL unset: no HTTP listener, local sessions only")
+		}
+		<-ctx.Done()
+		return nil
+	}
 	httpSrv := &http.Server{
 		Addr:              e.ListenAddr,
 		Handler:           newHTTPHandler(o, m, srv),

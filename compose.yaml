@@ -1,12 +1,14 @@
 services:
   your-mail-mcp:
     image: ghcr.io/wildsurfer/your-mail-mcp:latest
+    container_name: your-mail-mcp
+    command: serve
     restart: unless-stopped
     ports:
       - "127.0.0.1:8080:8080"
     environment:
-      PUBLIC_URL: ${PUBLIC_URL}
-      OAUTH_PASSPHRASE: ${OAUTH_PASSPHRASE}
+      PUBLIC_URL: ${PUBLIC_URL:-}
+      OAUTH_PASSPHRASE: ${OAUTH_PASSPHRASE:-}
       SYNC_INTERVAL: ${SYNC_INTERVAL:-10m}
       SYNC_TIMEOUT: ${SYNC_TIMEOUT:-1h}
       WORK_PASS: ${WORK_PASS:-}

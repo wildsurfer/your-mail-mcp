@@ -14,7 +14,9 @@ against real tools is in `docs/reviews/`.
 v1 is implemented: eleven read tools, multi-account sync, SPECIAL-USE junk
 discovery, OAuth with dynamic client registration, and a container image.
 
-Not verified against a real mail account yet. See "Before trusting it" below.
+Running against one real iCloud account and two real Gmail accounts. That is
+one operator's mailbox, so see "Before trusting it" below for what is still
+unproven.
 
 ## Invariants
 
@@ -36,9 +38,10 @@ without changing the spec first.
   returns images as typed MCP content whose schema names them
   attacker-authored, capped at 5MB. Textual parts — text/*, JSON, XML,
   message/rfc822 — pass through `render`; every other binary is served only
-  as a short-lived signed link to `GET /attachment/{id}/{part}` (bearer
-  token also accepted): those bytes go to a shell or a browser, never into
-  model context, so no cap and no `render` apply there.
+  as a short-lived signed link to `GET /attachment/{id}/{part}` (or, with no
+  listener, a file under the index for `docker cp`) (bearer token also
+  accepted): those bytes go to a shell or a browser, never into model
+  context, so no cap and no `render` apply there.
 - **Junk and trash are excluded from search by default**, discovered per account
   through RFC 6154 SPECIAL-USE so it works whatever the folders are named and in
   whatever language.
@@ -51,6 +54,10 @@ without changing the spec first.
   intends draft composition behind a send gate built as a type — a
   constructor that returns a refusing implementation when sending is off —
   per the spec.
+- **One process, two attach points.** The container runs `serve`: sync,
+  index, a Unix socket for local clients, and HTTP only when `PUBLIC_URL` is
+  set. `stdio` bridges stdin/stdout to that socket, or runs the daemon
+  in-process when no socket exists. Spec section 7.
 - **Build, not adopt.** Every existing email MCP server is a live-IMAP server with
   a send path, which is the opposite of both choices above. See
   `docs/research/email-mcp-landscape.md`.
@@ -76,6 +83,7 @@ without changing the spec first.
 | `notmuch.go` | executing notmuch, query validation, account scoping |
 | `sync.go` | generated configs, mbsync, sync mutex, guards, SPECIAL-USE discovery |
 | `oauth.go` | authorization-server endpoints and the client/token store |
+| `bridge.go` | `stdio` bridge to the daemon socket |
 | `.github/workflows/ci.yaml` | vet, unit and live tests on every PR; multi-arch image to GHCR on main and tags; release binaries on tags |
 | `docs/specs/` | the design spec, which is the binding authority |
 | `docs/reviews/` | what was verified against the real toolchain, and what was not |
@@ -108,12 +116,20 @@ without changing the spec first.
 
 ## Before trusting it
 
-The gap between "tests pass" and "safe against a real mailbox" is these three:
+Sync and serving now run against real iCloud and Gmail accounts, so the IMAP
+`LIST` and the mirror are exercised in the field. The gap between that and
+"safe against any real mailbox" is these four:
 
-1. SPECIAL-USE discovery against a real Gmail and a real iCloud account. The
-   live test covers a real IMAP conversation end to end, but its test server
-   does not advertise SPECIAL-USE, so junk discovery against the providers that
-   do remains unverified in the field.
+1. Whether SPECIAL-USE discovery picks the *right* junk and trash folders per
+   provider. It runs against real Gmail and iCloud now, but nobody has read
+   back the `folders` output and confirmed the discovered names against what
+   the provider actually calls those mailboxes. The live test's server does not
+   advertise SPECIAL-USE, so the test suite cannot answer this.
 2. A real connector handshake. The OAuth flow has only been exercised through
-   `httptest`.
+   `httptest` and over localhost.
 3. The README quick start, followed literally on a clean machine.
+4. Whether `MaxMessages 1000` on the `recent` channel behaves as the mbsync
+   manual describes against a real provider. The live test cannot reach that
+   boundary. The first real run found one thing the manual does not stress:
+   without `ExpireUnread yes`, mbsync skips a mailbox holding more unread
+   messages than the cap. That is set now; the cap itself is still unproven.

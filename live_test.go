@@ -14,12 +14,17 @@ package main
 // and torn down afterwards, including volumes.
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/base64"
 	"fmt"
+	"io"
 	"net/http"
 	"net/smtp"
 	"net/url"
 	"os/exec"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -42,6 +47,17 @@ func liveCompose(t *testing.T, args ...string) {
 	}
 }
 
+// liveComposeOutput is liveCompose for the calls whose output is the assertion.
+func liveComposeOutput(t *testing.T, args ...string) string {
+	t.Helper()
+	full := append([]string{"compose", "-p", "ymm-live", "-f", "testdata/live/compose.live.yaml"}, args...)
+	out, err := exec.Command("docker", full...).CombinedOutput()
+	if err != nil {
+		t.Fatalf("docker %s: %v\n%s", strings.Join(full, " "), err, out)
+	}
+	return string(out)
+}
+
 func seed(t *testing.T, id, from, subject, body string, html bool) {
 	t.Helper()
 	mime := ""
@@ -50,9 +66,45 @@ func seed(t *testing.T, id, from, subject, body string, html bool) {
 	}
 	msg := fmt.Sprintf("From: %s\r\nTo: tester\r\nSubject: %s\r\nMessage-ID: <%s>\r\nDate: %s\r\n%s\r\n%s\r\n",
 		from, subject, id, time.Now().UTC().Format(time.RFC1123Z), mime, body)
+	seedRaw(t, from, msg)
+}
+
+// seedRaw delivers a complete message, headers included, to the tester's
+// inbox over SMTP.
+func seedRaw(t *testing.T, from, msg string) {
+	t.Helper()
 	if err := smtp.SendMail(liveSMTP, nil, from, []string{"tester"}, []byte(msg)); err != nil {
-		t.Fatalf("seeding %s: %v", id, err)
+		t.Fatalf("seeding from %s: %v", from, err)
 	}
+}
+
+// mcpOverStdin starts cmd, sends the MCP handshake and a tools/list on its
+// stdin, holds the pipe open long enough for Docker to attach it, and
+// returns everything the process wrote to stdout.
+func mcpOverStdin(t *testing.T, cmd *exec.Cmd) string {
+	t.Helper()
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	in, err := cmd.StdinPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	fmt.Fprint(in, strings.Join([]string{
+		`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"live","version":"0"}}}`,
+		`{"jsonrpc":"2.0","method":"notifications/initialized"}`,
+		`{"jsonrpc":"2.0","id":2,"method":"tools/list"}`,
+	}, "\n")+"\n")
+	// Docker attaches stdin asynchronously, so a pipe that closes the instant
+	// the lines are written can take the reply with it. Hold it open.
+	time.Sleep(time.Second)
+	in.Close()
+	if err := cmd.Wait(); err != nil {
+		t.Fatalf("%s: %v\n%s", strings.Join(cmd.Args, " "), err, out.String())
+	}
+	return out.String()
 }
 
 // liveToken walks the real DCR flow against the running container.
@@ -243,5 +295,80 @@ func TestLive(t *testing.T) {
 			t.Fatal("the refreshed message never appeared")
 		}
 		time.Sleep(2 * time.Second)
+	}
+
+	// The recent channel is its own mbsync invocation into its own store, and
+	// MaxMessages there has only ever been read about, never run against a
+	// server. Its maildir holds messages only if that invocation worked.
+	ls := liveComposeOutput(t, "exec", "-T", "your-mail-mcp", "ls", "-R", "/mail")
+	// ls -R prints a "dir:" header per directory and a blank line after each
+	// listing, so a directory with nothing in it is a header and no entries.
+	if _, after, found := strings.Cut(ls, "/mail/testbox-recent/INBOX/new:\n"); !found || strings.HasPrefix(after, "\n") {
+		t.Fatalf("the recent channel pulled no mail into its own maildir; ls -R /mail:\n%s", ls)
+	}
+
+	// attachment, end to end and past the inline cap: the part comes back
+	// as a signed link, and the link serves the bytes intact.
+	pdf := bytes.Repeat([]byte("%PDF-1.4\n"), attachmentCap/9+1)
+	seedRaw(t, "erin@example.com", "From: erin@example.com\r\nTo: tester\r\nSubject: big attachment\r\n"+
+		"Message-ID: <big-live@example.com>\r\nDate: "+time.Now().UTC().Format(time.RFC1123Z)+"\r\n"+
+		"MIME-Version: 1.0\r\nContent-Type: multipart/mixed; boundary=B\r\n\r\n"+
+		"--B\r\nContent-Type: application/pdf\r\nContent-Disposition: attachment; filename=big.pdf\r\n"+
+		"Content-Transfer-Encoding: base64\r\n\r\n"+base64.StdEncoding.EncodeToString(pdf)+"\r\n--B--\r\n")
+	call("refresh", map[string]any{"account": "testbox"})
+	for {
+		if strings.Contains(call("search", map[string]any{"query": "from:erin@example.com"}), "big attachment") {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the attachment message never appeared")
+		}
+		time.Sleep(2 * time.Second)
+	}
+	reply := call("attachment", map[string]any{"id": "big-live@example.com", "part": 2})
+	link := regexp.MustCompile(`https?://\S+/attachment/\S+`).FindString(reply)
+	if link == "" {
+		t.Fatalf("attachment reply carries no link:\n%s", reply)
+	}
+	resp, err := http.Get(link)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if err != nil || resp.StatusCode != 200 {
+		t.Fatalf("GET %s: %d %v", link, resp.StatusCode, err)
+	}
+	if sha256.Sum256(body) != sha256.Sum256(pdf) {
+		t.Fatalf("downloaded %d bytes, want the %d-byte part intact", len(body), len(pdf))
+	}
+
+	if st := call("status", map[string]any{}); !strings.Contains(st, "full mirror") {
+		t.Fatalf("status does not report the mirror state:\n%s", st)
+	}
+
+	// README quick start: a local client attaches to the running daemon through
+	// docker exec, and the bridge answers tools/list over the socket.
+	bridged := mcpOverStdin(t, exec.Command("docker", "compose", "-p", "ymm-live", "-f", "testdata/live/compose.live.yaml",
+		"exec", "-T", "your-mail-mcp", "your-mail-mcp", "stdio"))
+	if got := strings.Count(bridged, `"name":"`); got < 11 {
+		t.Fatalf("want at least 11 tool names over the docker exec bridge, got %d:\n%s", got, bridged)
+	}
+}
+
+// TestLiveBareImageAnswersToolsList is the property every directory checks:
+// the shipped image, run with no environment and no volumes, speaks MCP on
+// stdin and lists its tools.
+func TestLiveBareImageAnswersToolsList(t *testing.T) {
+	if _, err := exec.LookPath("docker"); err != nil {
+		t.Skip("docker is not installed")
+	}
+	if out, err := exec.Command("docker", "build", "-t", "ymm-live-bare", ".").CombinedOutput(); err != nil {
+		t.Fatalf("docker build: %v\n%s", err, out)
+	}
+
+	out := mcpOverStdin(t, exec.Command("docker", "run", "-i", "--rm", "ymm-live-bare"))
+	if got := strings.Count(out, `"name":"`); got < 11 {
+		t.Fatalf("want at least 11 tool names in tools/list, got %d:\n%s", got, out)
 	}
 }

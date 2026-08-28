@@ -37,6 +37,10 @@ Multi-provider support is worth reframing. Requirement 2 belongs to the sync lay
 
 Scoring: **Y** meets the requirement, **~** partial, **N** fails.
 
+Star counts and dates in these tables are from 19 August 2026. Refreshed figures
+are in the addendum of 27 August 2026, along with a correction to how repository
+freshness was measured.
+
 ### Self-hosted candidates
 
 | Project | Lang | Licence | ★ | Last push | 1. Self-host | 2. Multi-account | 3. Security | 4. Read-only |
@@ -54,7 +58,7 @@ Scoring: **Y** meets the requirement, **~** partial, **N** fails.
 | [marlinjai/email-mcp](https://github.com/marlinjai/email-mcp) | TS | MIT | 17 | 2026-06-14 | **N** stdio only, no Docker | **Y** Gmail API + Graph + iCloud + IMAP | **Y** AES-256-GCM + OAuth2 PKCE | **N** none, and has `email_batch_delete` |
 | [cldt-fr/imap-mcp](https://github.com/cldt-fr/imap-mcp) | TS | MIT | 2 | 2026-04-30 | **~** compose, build-your-own, needs Clerk | **Y** unlimited per user, Postgres | **Y** AES-256-GCM + OAuth 2.1 RS + DCR | **N** none |
 
-\* The two independent checks of `better-email-mcp` returned MIT and Apache-2.0 respectively. Verify before relying on it.
+\* The two independent checks of `better-email-mcp` returned MIT and Apache-2.0 respectively. **Resolved 27 August 2026:** GitHub's API reports `Apache-2.0`.
 
 ### Not worth your time
 
@@ -373,6 +377,72 @@ What it does not change: the data-layer argument. iCloud offers no OAuth at all 
 Where mail-mcp genuinely leads everything else is **provider-quirk knowledge**, and that is worth copying regardless of which route is taken: provider-aware Sent-folder logic (Gmail dedupes by Message-ID, Zoho saves without deduping so an APPEND doubles the folder, Office 365 and generic relays save nothing), localised Sent-folder detection across seven languages, the Graph `createReply` attachment-loss bug and its fix, and MOVE-capability fallback to COPY + STORE + EXPUNGE with a UIDVALIDITY re-check between search and mutation. That last one is the single most useful twenty lines in the repository.
 
 On OAuth proper, mail-mcp is not the leader. `marlinjai/email-mcp` (browser PKCE with automatic refresh) and `cldt-fr/imap-mcp` (full OAuth 2.1 resource server) are further along. mail-mcp leads on provider *coverage*, not on credential handling.
+
+## Addendum, 27 August 2026 — figures refreshed, and one metric that lies
+
+### `pushed_at` is not a freshness signal
+
+The original sweep used GitHub's `pushed_at` as the proxy for "last activity",
+and labelled it as such. It is worse than labelled. `pushed_at` updates on a
+push to *any* branch, including a branch nobody merges and a tag.
+
+`codefuturist/email-mcp` is the clear case. Its `pushed_at` today is
+**2026-08-21**, which reads as an actively developed project. The last commit on
+its default branch is **2026-05-20**. The "three months idle" verdict in the body
+of this report was correct; the date given for it now looks stale for the wrong
+reason.
+
+`wyattjoh/jmap-mcp` shows the same gap in miniature: `pushed_at` 2026-08-24,
+default branch 2026-08-19.
+
+Use the default branch's last commit date. `gh api repos/OWNER/NAME/commits?per_page=1
+--jq '.[0].commit.author.date'`.
+
+### Figures as of 27 August 2026
+
+Open counts are GitHub's `open_issues_count`, which includes open pull requests.
+
+| Project | ★ (19 Aug → 27 Aug) | Open | Default branch | `pushed_at` |
+|---|---|---|---|---|
+| igor47/notmuchproxy | 0 → 0 | 11 | 2026-06-12 | 2026-07-01 |
+| hgn/mcp-server-notmuch | 0 → 0 | 1 | 2026-07-31 | 2026-07-31 |
+| bradsjm/mail-imap-mcp-rs | 0 → 0 | 0 | 2026-07-17 | 2026-07-17 |
+| Wh1isper/mcp-email-server | 313 → 317 | 1 | 2026-08-26 | 2026-08-26 |
+| codefuturist/email-mcp | 96 → 101 | 45 | **2026-05-20** | 2026-08-21 |
+| tecnologicachile/mail-mcp | 58 → 62 | 15 | 2026-07-17 | 2026-07-17 |
+| n24q02m/better-email-mcp | 30 → 32 | 13 | 2026-08-27 | 2026-08-27 |
+| jgalea/mailbox-mcp | 6 → 7 | 4 | 2026-07-13 | 2026-07-13 |
+| nikolausm/imap-mcp-server | 75 → 83 | 2 | 2026-08-21 | 2026-08-21 |
+| wyattjoh/jmap-mcp | 175 → 176 | 3 | 2026-08-19 | 2026-08-24 |
+| marlinjai/email-mcp | 17 → 18 | 9 | 2026-06-14 | 2026-06-14 |
+| cldt-fr/imap-mcp | 2 → 2 | 1 | 2026-04-30 | 2026-04-30 |
+| MadLlama25/fastmail-mcp | 124 → 126 | 5 | — | 2026-08-08 |
+| GongRzhe/Gmail-MCP-Server | 1165 → 1165 | 70 | — | 2025-08-06, archived |
+
+Nothing in eight days changes a verdict. `GongRzhe/Gmail-MCP-Server` is still
+archived and still gaining no stars, which is the only star movement in the
+table that means anything.
+
+### The codefuturist read-only hole, re-verified in source
+
+Both files were fetched again today from the default branch and the finding
+stands unchanged.
+
+`src/tools/register.ts` line 54 reads `const { readOnly } = config.settings;`,
+lines 57 to 74 register the read tools plus `registerWatcherTools`, and line 77
+gates the eight write registrations behind `if (!readOnly)`. That part is real.
+
+`src/main.ts` never mentions `readOnly` at all. Inside
+`lowLevelServer.oninitialized` it calls `hooksService.start(...)`,
+`watcherService.start()`, one `schedulerService.checkAndSend()` on startup, and
+then `setInterval(... checkAndSend() ..., 60_000)`. A server configured
+read-only sends whatever is already in its schedule store, on startup and every
+sixty seconds after.
+
+### Licence dispute resolved
+
+`n24q02m/better-email-mcp` is **Apache-2.0** per GitHub's API on 27 August 2026.
+The MIT reading in the original sweep was wrong.
 
 ## Verification notes
 
