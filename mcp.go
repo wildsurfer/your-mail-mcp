@@ -330,7 +330,14 @@ func (s *Server) attachmentTool(ctx context.Context, _ *mcp.CallToolRequest, a a
 		if err != nil {
 			return nil, nil, err
 		}
-		fetch = fmt.Sprintf("saved for you to fetch rather than returned inline:\n%s\nFrom the host: docker cp your-mail-mcp:%s .", path, path)
+		fetch = "saved for you to fetch rather than returned inline:\n" + path
+		// Inside a container the hostname is the container id, which docker cp
+		// accepts whatever the container was named or however it was started.
+		if host, err := os.Hostname(); err == nil {
+			if _, err := os.Stat("/.dockerenv"); err == nil {
+				fetch += fmt.Sprintf("\nFrom the host: docker cp %s:%s .", host, path)
+			}
+		}
 	} else {
 		fetch = fmt.Sprintf("served by link rather than inline. Download it (link valid %d minutes):\n%s",
 			int(attachmentLinkTTL.Minutes()), s.attachmentURL(a.ID, a.Part))
@@ -360,7 +367,44 @@ func (s *Server) saveAttachment(id string, part int, raw []byte) (string, error)
 	}
 	hash := sha256.Sum256([]byte(id))
 	path := filepath.Join(dir, fmt.Sprintf("%s-%x-%d", safe, hash[:4], part))
+	evictAttachments(dir, attachmentStoreCap-int64(len(raw)), path)
 	return path, os.WriteFile(path, raw, 0o600)
+}
+
+// attachmentStoreCap bounds the attachments directory. Saved parts exist for
+// a docker cp now, not as an archive, and the directory shares the index
+// volume with the Xapian database, so the oldest files go first once the
+// total passes this. A single part larger than the cap is still written, so
+// the bound is soft by one file.
+var attachmentStoreCap int64 = 1 << 30
+
+// evictAttachments removes the oldest regular files in dir until the rest
+// total at most budget bytes. keep is the file about to be written; it is
+// left out of the count because the write replaces it.
+func evictAttachments(dir string, budget int64, keep string) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	var files []fs.FileInfo
+	var total int64
+	for _, e := range entries {
+		info, err := e.Info()
+		if err != nil || !info.Mode().IsRegular() || filepath.Join(dir, info.Name()) == keep {
+			continue
+		}
+		files = append(files, info)
+		total += info.Size()
+	}
+	sort.Slice(files, func(i, j int) bool { return files[i].ModTime().Before(files[j].ModTime()) })
+	for _, f := range files {
+		if total <= budget {
+			return
+		}
+		if os.Remove(filepath.Join(dir, f.Name())) == nil {
+			total -= f.Size()
+		}
+	}
 }
 
 // textualPart reports whether a MIME type is text in substance, whatever its

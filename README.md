@@ -301,7 +301,8 @@ tool one part at a time: images inline up to 5MB, textual parts as marked
 text, and other binaries as a short-lived signed link to
 `GET /attachment/{id}/{part}` (a bearer token works there too). Without an
 HTTP listener, an oversized binary is saved under `/index/attachments/` and
-the tool returns the path to `docker cp`.
+the tool returns the path to `docker cp`. That directory is capped at 1GB;
+the oldest files go first.
 
 ## Why not one of the others
 

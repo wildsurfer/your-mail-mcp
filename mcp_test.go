@@ -1158,12 +1158,18 @@ func TestAttachmentImagePastCapReturnsLink(t *testing.T) {
 func TestAttachmentPastCapSavedToIndexIntact(t *testing.T) {
 	s, _, pdf := bigAttachmentFixture(t)
 	s.index = t.TempDir()
-	if _, _, err := s.attachmentTool(context.Background(), nil, attachmentArgs{ID: "big1@example.com", Part: 3}); err != nil {
+	out, _, err := s.attachmentTool(context.Background(), nil, attachmentArgs{ID: "big1@example.com", Part: 3})
+	if err != nil {
 		t.Fatal(err)
 	}
 	entries, err := os.ReadDir(filepath.Join(s.index, "attachments"))
 	if err != nil || len(entries) != 1 {
 		t.Fatalf("want exactly one saved file, got %v %v", entries, err)
+	}
+	// The reply names the file; the container name is the hostname at
+	// runtime, never a fixed string that only one deployment uses.
+	if got := resultText(t, out); !strings.Contains(got, entries[0].Name()) || strings.Contains(got, "your-mail-mcp:") {
+		t.Fatalf("want the saved path and no hardcoded container name, got:\n%s", got)
 	}
 	got, err := os.ReadFile(filepath.Join(s.index, "attachments", entries[0].Name()))
 	if err != nil {
@@ -1326,5 +1332,38 @@ func TestSaveAttachmentDoesNotCollideOnSameSanitisedID(t *testing.T) {
 	b2, err := os.ReadFile(p2)
 	if err != nil || !bytes.Equal(b2, []byte{2}) {
 		t.Fatalf("second file wrong content: %v %v", b2, err)
+	}
+}
+
+func TestSaveAttachmentEvictsOldestPastCap(t *testing.T) {
+	s := newServer(&Config{}, nil, t.TempDir())
+	s.index = t.TempDir()
+	defer func(c int64) { attachmentStoreCap = c }(attachmentStoreCap)
+	attachmentStoreCap = 10
+	old, err := s.saveAttachment("<old@x>", 1, make([]byte, 4))
+	if err != nil {
+		t.Fatal(err)
+	}
+	mid, err := s.saveAttachment("<mid@x>", 1, make([]byte, 4))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Modification times can tie on a fast filesystem; make the order explicit.
+	past := time.Now().Add(-2 * time.Hour)
+	if err := os.Chtimes(old, past, past); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(mid, past.Add(time.Hour), past.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	// 4+4+4 bytes exceed the cap of 10: the oldest goes, the middle one stays.
+	if _, err := s.saveAttachment("<new@x>", 1, make([]byte, 4)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(old); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("oldest file should have been evicted, stat: %v", err)
+	}
+	if _, err := os.Stat(mid); err != nil {
+		t.Fatalf("middle file should survive: %v", err)
 	}
 }
