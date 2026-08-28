@@ -185,6 +185,19 @@ func TestCompleteWhenRecentFailsButFullSucceeds(t *testing.T) {
 	}
 }
 
+func TestRecentChannelStopsOnceComplete(t *testing.T) {
+	s, calls := testSyncer(t)
+	for i := 0; i < 2; i++ {
+		if _, err := s.Sync(context.Background(), "home"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	want := []string{"home-recent", "home-full", "home-full"}
+	if strings.Join(*calls, " ") != strings.Join(want, " ") {
+		t.Fatalf("want recent only until the full mirror completes, got %v", *calls)
+	}
+}
+
 func TestNotCompleteWhenFullFails(t *testing.T) {
 	s, _ := testSyncer(t)
 	s.runCmd = func(_ context.Context, _ string, args ...string) (string, error) {

@@ -530,7 +530,9 @@ Each account gets two mbsync channels into two local paths. `recent` covers
 INBOX only with `MaxMessages 1000`, so it fetches the newest thousand UIDs
 and ignores the rest: minutes, not weeks. `full` covers every folder. They
 run as two mbsync invocations in that order inside the account's goroutine; a
-failure of `recent` is logged and does not stop `full`. notmuch
+failure of `recent` is logged and does not stop `full`. Once an account is
+complete, `recent` is skipped on every later pass: `full` then covers
+everything it could, and the extra login per pass would buy nothing. notmuch
 merges duplicates by Message-ID, so a message reached by both channels is one
 message in every result. `MaxMessages` expiry touches the near side only and
 `Expunge None` keeps even that from becoming a delete; the four read-only

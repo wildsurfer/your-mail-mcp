@@ -214,7 +214,8 @@ The first sync populates the maildir, into two directories per account:
 `<name>/` for the full history and `<name>-recent/` for a fast INBOX-only
 pass. Today's INBOX mail is searchable within minutes; the full history
 follows at whatever pace the provider allows, and `status` reports how far it
-has got.
+has got. Once the full history is complete the recent pass stops running; its
+directory stays, and notmuch already counts each message it holds once.
 
 **Claude Code**
 

@@ -421,8 +421,16 @@ func (s *Syncer) syncAccount(ctx context.Context, name string) (string, error) {
 	}
 	accountCtx, cancel := context.WithTimeout(ctx, s.timeout)
 	defer cancel()
-	if _, err := s.runCmd(accountCtx, "mbsync", "-c", s.mbsyncConfig, name+"-recent"); err != nil {
-		fmt.Fprintf(os.Stderr, "sync: account %s: recent: %v\n", name, err)
+	// The recent channel exists to make today's mail searchable while the
+	// full mirror is still filling. Once full has completed it covers
+	// everything recent could, so the extra login per pass buys nothing.
+	s.mu.Lock()
+	complete := s.status[name].Complete
+	s.mu.Unlock()
+	if !complete {
+		if _, err := s.runCmd(accountCtx, "mbsync", "-c", s.mbsyncConfig, name+"-recent"); err != nil {
+			fmt.Fprintf(os.Stderr, "sync: account %s: recent: %v\n", name, err)
+		}
 	}
 	out, err := s.runCmd(accountCtx, "mbsync", "-c", s.mbsyncConfig, name+"-full")
 	if err != nil && accountCtx.Err() != nil && ctx.Err() == nil {
