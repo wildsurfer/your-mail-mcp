@@ -110,6 +110,11 @@ Then connect a client. Claude Code:
 claude mcp add your-mail -- docker exec -i your-mail-mcp your-mail-mcp stdio
 ```
 
+Cursor and VS Code add it in one click, once the stack is up:
+
+[![Add to Cursor](https://cursor.com/deeplink/mcp-install-dark.svg)](https://cursor.com/install-mcp?name=your-mail&config=eyJjb21tYW5kIjoiZG9ja2VyIiwiYXJncyI6WyJleGVjIiwiLWkiLCJ5b3VyLW1haWwtbWNwIiwieW91ci1tYWlsLW1jcCIsInN0ZGlvIl19)
+[![Install in VS Code](https://img.shields.io/badge/VS_Code-Install_Server-0098FF?style=flat-square&logo=visualstudiocode&logoColor=white)](https://insiders.vscode.dev/redirect/mcp/install?name=your-mail&config=%7B%22command%22%3A%22docker%22%2C%22args%22%3A%5B%22exec%22%2C%22-i%22%2C%22your-mail-mcp%22%2C%22your-mail-mcp%22%2C%22stdio%22%5D%7D)
+
 <details>
 <summary>Claude Desktop, Cursor, Codex and other stdio clients</summary>
 
