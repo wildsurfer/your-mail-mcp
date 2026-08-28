@@ -569,3 +569,17 @@ func TestRefreshPassOutlivesTheToolCall(t *testing.T) {
 		t.Fatalf("mbsync ran under the cancelled tool-call context: %v", passErr)
 	}
 }
+
+// A set PUBLIC_URL with no passphrase must be refused before run touches a
+// provider, so a misconfigured restart loop never logs in to an account.
+func TestRunRefusesPublicURLWithoutPassphrase(t *testing.T) {
+	t.Setenv("CONFIG", filepath.Join(t.TempDir(), "missing.json"))
+	t.Setenv("MAILDIR", t.TempDir())
+	t.Setenv("INDEX", t.TempDir())
+	t.Setenv("PUBLIC_URL", "https://mail.example.com")
+	t.Setenv("OAUTH_PASSPHRASE", "")
+	err := run(context.Background(), false)
+	if err == nil || !strings.Contains(err.Error(), "OAUTH_PASSPHRASE") {
+		t.Fatalf("want the passphrase refusal, got %v", err)
+	}
+}

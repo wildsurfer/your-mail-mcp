@@ -444,6 +444,16 @@ func run(ctx context.Context, stdio bool) error {
 	srv.syncBusy = syncer.Busy
 	syncer.interval = e.SyncInterval
 
+	// Built before any goroutine touches a provider: a missing
+	// OAUTH_PASSPHRASE must exit the process now, not after logging in to
+	// every configured account first.
+	var o *oauthServer
+	if e.PublicURL != "" {
+		if o, err = newOAuth(filepath.Join(e.Index, "oauth.json"), e.PublicURL, e.Passphrase); err != nil {
+			return err
+		}
+	}
+
 	// Config-tier exclusions touch no network, so they are applied inline
 	// before the listener opens. Full discovery needs a live IMAP login per
 	// account and must not delay startup waiting on an unreachable provider,
@@ -503,10 +513,6 @@ func run(ctx context.Context, stdio bool) error {
 		}
 		<-ctx.Done()
 		return nil
-	}
-	o, err := newOAuth(filepath.Join(e.Index, "oauth.json"), e.PublicURL, e.Passphrase)
-	if err != nil {
-		return err
 	}
 	httpSrv := &http.Server{
 		Addr:              e.ListenAddr,
