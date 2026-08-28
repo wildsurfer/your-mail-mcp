@@ -1,0 +1,10 @@
+{
+  "name": "your-mail",
+  "description": "Read-only access to your IMAP mail through the your-mail-mcp server, with an email skill that knows the query syntax and the rules for untrusted mail.",
+  "version": "0.3.0",
+  "author": { "name": "Ivan Kuznetsov" },
+  "homepage": "https://github.com/wildsurfer/your-mail-mcp",
+  "repository": "https://github.com/wildsurfer/your-mail-mcp",
+  "license": "MIT",
+  "keywords": ["email", "imap", "gmail", "icloud", "notmuch", "read-only", "mcp"]
+}

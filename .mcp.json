@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "your-mail": {
+      "command": "docker",
+      "args": ["exec", "-i", "your-mail-mcp", "your-mail-mcp", "stdio"]
+    }
+  }
+}

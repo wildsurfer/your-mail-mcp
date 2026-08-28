@@ -123,6 +123,14 @@ Each session is a bridge into the running container, so every client sees
 the same index and the same sync. Close the client and the session goes with
 it.
 
+Claude Code can also take it as a plugin, which adds the server and an
+`email` skill that knows the query syntax:
+
+```
+/plugin marketplace add wildsurfer/your-mail-mcp
+/plugin install your-mail@your-mail-mcp
+```
+
 Without a running stack,
 `docker run -i --rm --env-file .env -v index:/index -v mail:/mail -v ./accounts.json:/config/accounts.json:ro ghcr.io/wildsurfer/your-mail-mcp`
 starts a daemon for the life of one session. Fine for a look; use compose for
