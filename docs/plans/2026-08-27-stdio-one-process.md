@@ -1,7 +1,5 @@
 # stdio, one process, fresh mail first: Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
-
 **Goal:** Ship section 7 of the spec: a `stdio` attach point over a Unix socket, HTTP only when `PUBLIC_URL` is set, `refresh` as the full scheduled pass with a bounded wait, a `recent` mbsync channel so today's mail is searchable during a weeks-long initial mirror, and mirror-progress metadata on results.
 
 **Architecture:** One process. `serve` syncs on a ticker, listens on `INDEX/mcp.sock` for local sessions, and optionally on HTTP. `stdio` bridges stdin/stdout to that socket, or runs the daemon in-process when no socket exists. Every session is one `mcp.ServerSession` on the same `*mcp.Server`, so both attach points share one `Syncer`. mbsync gets a second `recent` channel per account with `MaxMessages`; notmuch merges the overlap by Message-ID.
