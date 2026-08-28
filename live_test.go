@@ -347,7 +347,7 @@ func TestLive(t *testing.T) {
 		t.Fatalf("status does not report the mirror state:\n%s", st)
 	}
 
-	// README case 1: a local client attaches to the running daemon through
+	// README quick start: a local client attaches to the running daemon through
 	// docker exec, and the bridge answers tools/list over the socket.
 	bridged := mcpOverStdin(t, exec.Command("docker", "compose", "-p", "ymm-live", "-f", "testdata/live/compose.live.yaml",
 		"exec", "-T", "your-mail-mcp", "your-mail-mcp", "stdio"))
