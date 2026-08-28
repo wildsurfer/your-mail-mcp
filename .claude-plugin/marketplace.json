@@ -1,0 +1,16 @@
+{
+  "name": "your-mail-mcp",
+  "owner": { "name": "Ivan Kuznetsov" },
+  "description": "Read-only IMAP mail for your assistant: the your-mail plugin attaches to a running your-mail-mcp container.",
+  "plugins": [
+    {
+      "name": "your-mail",
+      "source": "./",
+      "description": "Read-only access to your IMAP mail, plus an email skill.",
+      "version": "0.3.0",
+      "homepage": "https://github.com/wildsurfer/your-mail-mcp",
+      "license": "MIT",
+      "keywords": ["email", "imap", "gmail", "icloud", "notmuch", "read-only"]
+    }
+  ]
+}
