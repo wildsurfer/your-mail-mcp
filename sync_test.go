@@ -119,7 +119,7 @@ func TestGenMbsyncrcAddsRecentChannelPerAccount(t *testing.T) {
 	cfg := &Config{Accounts: []Account{{Name: "work", Host: "h", User: "u", Password: "p"}}}
 	got := genMbsyncrc(cfg, "/mail")
 	for _, want := range []string{
-		"Channel work-recent\n", "Patterns \"INBOX\"\n", "MaxMessages 1000\n",
+		"Channel work-recent\n", "Patterns \"INBOX\"\n", "MaxMessages 1000\n", "ExpireUnread yes\n",
 		"MaildirStore work-recent-local\n", "Path /mail/work-recent/\n",
 		"Channel work-full\n",
 	} {

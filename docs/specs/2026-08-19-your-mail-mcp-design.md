@@ -527,7 +527,9 @@ started, and the last pass's duration.
 ### Fresh mail first
 
 Each account gets two mbsync channels into two local paths. `recent` covers
-INBOX only with `MaxMessages 1000`, so it fetches the newest thousand UIDs
+INBOX only with `MaxMessages 1000` and `ExpireUnread yes` (without which mbsync
+skips any mailbox holding more unread messages than the cap, as a real INBOX
+does on day one), so it fetches the newest thousand UIDs
 and ignores the rest: minutes, not weeks. `full` covers every folder. They
 run as two mbsync invocations in that order inside the account's goroutine; a
 failure of `recent` is logged and does not stop `full`. Once an account is

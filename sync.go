@@ -150,6 +150,11 @@ func genMbsyncrc(cfg *Config, maildir string) string {
 		b.WriteString("Near :" + a.Name + "-recent-local:\n")
 		b.WriteString("Patterns \"INBOX\"\n")
 		b.WriteString("MaxMessages 1000\n")
+		// Without this, mbsync refuses to apply the cap to a mailbox holding
+		// more unread messages than it and skips the mailbox outright, which
+		// a real INBOX with a thousand unread mails does on day one. Expiry
+		// is still near-side only, and Expunge None keeps it from deleting.
+		b.WriteString("ExpireUnread yes\n")
 		b.WriteString(channelTail)
 	}
 	return b.String()

@@ -130,4 +130,6 @@ Sync and serving now run against real iCloud and Gmail accounts, so the IMAP
 3. The README quick start, followed literally on a clean machine.
 4. Whether `MaxMessages 1000` on the `recent` channel behaves as the mbsync
    manual describes against a real provider. The live test cannot reach that
-   boundary.
+   boundary. The first real run found one thing the manual does not stress:
+   without `ExpireUnread yes`, mbsync skips a mailbox holding more unread
+   messages than the cap. That is set now; the cap itself is still unproven.
