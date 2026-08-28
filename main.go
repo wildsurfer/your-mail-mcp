@@ -350,33 +350,23 @@ func startStdioSession(ctx context.Context, cancel context.CancelFunc, m *mcp.Se
 	}()
 }
 
-// pickMode maps the command line onto the three ways the binary runs. With
-// no argument it behaves as stdio, so a bare "docker run -i image" speaks
-// MCP on stdin, which is what every client and directory expects.
-func pickMode(args []string, socketExists bool) string {
-	if len(args) > 0 && args[0] == "serve" {
-		return "serve"
-	}
-	if socketExists {
-		return "bridge"
-	}
-	return "stdio-daemon"
-}
-
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	// "serve" is the daemon. Anything else, including no argument, is stdio,
+	// so a bare "docker run -i image" speaks MCP on stdin, which is what
+	// every client and directory expects.
 	sock := filepath.Join(os.Getenv("INDEX"), "mcp.sock")
 	_, statErr := os.Stat(sock)
 	var err error
-	switch pickMode(os.Args[1:], statErr == nil) {
-	case "serve":
+	switch {
+	case len(os.Args) > 1 && os.Args[1] == "serve":
 		err = run(ctx, false)
-	case "bridge":
+	case statErr == nil:
 		// A stale socket file is indistinguishable from a live daemon until
 		// the dial fails. run's serveSocket removes the file before
 		// listening, so taking over as the daemon is what heals it.
-		if err = bridge(ctx, sock); errors.Is(err, errNoDaemon) {
+		if err = bridgeIO(ctx, sock, os.Stdin, os.Stdout); errors.Is(err, errNoDaemon) {
 			err = run(ctx, true)
 		}
 	default:
@@ -498,16 +488,14 @@ func run(ctx context.Context, stdio bool) error {
 		// process goes: a daemon that outlives its client is the orphan bug
 		// every stdio server ships. startStdioSession cancels the shared ctx
 		// above, so this reaches the HTTP shutdown goroutine too when
-		// PublicURL is set, not just the early return right below.
+		// PublicURL is set.
 		startStdioSession(ctx, cancel, m, &mcp.StdioTransport{})
-		if e.PublicURL == "" {
-			<-ctx.Done()
-			return nil
-		}
 	}
 
 	if e.PublicURL == "" {
-		fmt.Fprintln(os.Stderr, "PUBLIC_URL unset: no HTTP listener, local sessions only")
+		if !stdio {
+			fmt.Fprintln(os.Stderr, "PUBLIC_URL unset: no HTTP listener, local sessions only")
+		}
 		<-ctx.Done()
 		return nil
 	}

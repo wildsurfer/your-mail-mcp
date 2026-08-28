@@ -306,6 +306,21 @@ func TestLoadEnvAcceptsAndAppliesSyncTimeout(t *testing.T) {
 	}
 }
 
+// dialSocket connects to a socket that serveSocket is still bringing up.
+func dialSocket(t *testing.T, sock string) net.Conn {
+	t.Helper()
+	var conn net.Conn
+	var err error
+	for i := 0; i < 50; i++ {
+		if conn, err = net.Dial("unix", sock); err == nil {
+			return conn
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("socket never came up: %v", err)
+	return nil
+}
+
 func TestServeSocketAnswersToolsList(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -313,17 +328,7 @@ func TestServeSocketAnswersToolsList(t *testing.T) {
 	m := mcp.NewServer(&mcp.Implementation{Name: "t", Version: "0"}, nil)
 	newServer(&Config{}, nil, t.TempDir()).registerTools(m)
 	go func() { _ = serveSocket(ctx, sock, m) }()
-	var conn net.Conn
-	var err error
-	for i := 0; i < 50; i++ {
-		if conn, err = net.Dial("unix", sock); err == nil {
-			break
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-	if err != nil {
-		t.Fatalf("socket never came up: %v", err)
-	}
+	conn := dialSocket(t, sock)
 	defer conn.Close()
 	c := mcp.NewClient(&mcp.Implementation{Name: "c", Version: "0"}, nil)
 	sess, err := c.Connect(ctx, &mcp.IOTransport{Reader: conn, Writer: conn}, nil)
@@ -374,20 +379,7 @@ func TestServeSocketReleasesTheSessionWatcher(t *testing.T) {
 	newServer(&Config{}, nil, t.TempDir()).registerTools(m)
 	go func() { _ = serveSocket(ctx, sock, m) }()
 
-	dialAndLeave := func() {
-		var conn net.Conn
-		var err error
-		for i := 0; i < 50; i++ {
-			if conn, err = net.Dial("unix", sock); err == nil {
-				break
-			}
-			time.Sleep(20 * time.Millisecond)
-		}
-		if err != nil {
-			t.Fatalf("socket never came up: %v", err)
-		}
-		conn.Close()
-	}
+	dialAndLeave := func() { dialSocket(t, sock).Close() }
 
 	// One connection first, so the SDK's own one-time goroutines are already
 	// running when the baseline is taken.
@@ -504,9 +496,6 @@ func TestBridgeReportsNoDaemonForStaleSocket(t *testing.T) {
 	if err := os.WriteFile(sock, nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if got := pickMode([]string{"stdio"}, true); got != "bridge" {
-		t.Fatalf("a stale socket file picks %s, want bridge", got)
-	}
 	err := bridgeIO(context.Background(), sock, strings.NewReader(""), io.Discard)
 	if !errors.Is(err, errNoDaemon) {
 		t.Fatalf("bridgeIO on a stale socket returned %v, want an errNoDaemon", err)
@@ -526,27 +515,6 @@ func TestStdioSessionEOFCancelsSharedContext(t *testing.T) {
 	case <-ctx.Done():
 	case <-time.After(2 * time.Second):
 		t.Fatal("shared ctx was not cancelled within 2s of the stdio transport's input closing")
-	}
-}
-
-func TestDispatchPicksModeFromArgs(t *testing.T) {
-	cases := map[string]struct {
-		args     []string
-		sockUp   bool
-		wantMode string
-	}{
-		"serve":                {[]string{"serve"}, false, "serve"},
-		"stdio, no socket":     {[]string{"stdio"}, false, "stdio-daemon"},
-		"stdio, socket exists": {[]string{"stdio"}, true, "bridge"},
-		"no args, no socket":   {nil, false, "stdio-daemon"},
-		"no args, socket":      {nil, true, "bridge"},
-	}
-	for name, c := range cases {
-		t.Run(name, func(t *testing.T) {
-			if got := pickMode(c.args, c.sockUp); got != c.wantMode {
-				t.Fatalf("want %s, got %s", c.wantMode, got)
-			}
-		})
 	}
 }
 

@@ -71,6 +71,11 @@ synchronize_flags=true
 // The password is written into the file. The file lives on the ordinary
 // container filesystem, in a directory only this process writes to, at mode
 // 0600, so it is no more exposed than the environment it came from.
+// channelTail closes every generated channel. The first four lines are the
+// read-only guarantee; they must appear once per channel, and the directive
+// test counts them.
+const channelTail = "Sync Pull\nCreate Near\nRemove None\nExpunge None\nSyncState *\nCopyArrivalDate yes\n"
+
 func genMbsyncrc(cfg *Config, maildir string) string {
 	var b strings.Builder
 	b.WriteString("# generated at startup; edits are discarded on restart\n")
@@ -126,12 +131,7 @@ func genMbsyncrc(cfg *Config, maildir string) string {
 		}
 		b.WriteString("Patterns " + strings.Join(pats, " ") + "\n")
 		// The read-only guarantee. Do not add a blank line above this comment.
-		b.WriteString("Sync Pull\n")
-		b.WriteString("Create Near\n")
-		b.WriteString("Remove None\n")
-		b.WriteString("Expunge None\n")
-		b.WriteString("SyncState *\n")
-		b.WriteString("CopyArrivalDate yes\n")
+		b.WriteString(channelTail)
 
 		// A second, small channel so today's mail is searchable within
 		// minutes of a first run, while the full mirror takes as long as
@@ -150,12 +150,7 @@ func genMbsyncrc(cfg *Config, maildir string) string {
 		b.WriteString("Near :" + a.Name + "-recent-local:\n")
 		b.WriteString("Patterns \"INBOX\"\n")
 		b.WriteString("MaxMessages 1000\n")
-		b.WriteString("Sync Pull\n")
-		b.WriteString("Create Near\n")
-		b.WriteString("Remove None\n")
-		b.WriteString("Expunge None\n")
-		b.WriteString("SyncState *\n")
-		b.WriteString("CopyArrivalDate yes\n")
+		b.WriteString(channelTail)
 	}
 	return b.String()
 }

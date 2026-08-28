@@ -332,15 +332,24 @@ func TestSyncOneAccountIsAllFolders(t *testing.T) {
 	}
 }
 
-func TestSyncWaitJoinsRunningPass(t *testing.T) {
-	s, _ := testSyncer(t)
-	release := make(chan struct{})
-	entered := make(chan struct{}, 1)
+// blockingSyncer is a testSyncer whose runCmd parks until release is closed,
+// sending on entered once per invocation so a test can wait until a pass is
+// genuinely in flight before acting on it. n is how many invocations may
+// enter before the test drains the channel.
+func blockingSyncer(t *testing.T, n int) (s *Syncer, release, entered chan struct{}) {
+	t.Helper()
+	s, _ = testSyncer(t)
+	release, entered = make(chan struct{}), make(chan struct{}, n)
 	s.runCmd = func(context.Context, string, ...string) (string, error) {
 		entered <- struct{}{}
 		<-release
 		return "", nil
 	}
+	return s, release, entered
+}
+
+func TestSyncWaitJoinsRunningPass(t *testing.T) {
+	s, release, entered := blockingSyncer(t, 1)
 	go func() { _, _ = s.Sync(context.Background(), "home") }()
 	<-entered
 	if s.Wait(context.Background(), 30*time.Millisecond) {
@@ -365,14 +374,7 @@ func TestSyncWaitJoinsRunningPass(t *testing.T) {
 // call refused with errSyncBusy must leave it alone. Closing it there would
 // tell refresh the pass had finished the instant it collided with one.
 func TestWaitOutlivesARefusedConcurrentSync(t *testing.T) {
-	s, _ := testSyncer(t)
-	release, entered := make(chan struct{}), make(chan struct{})
-	var once sync.Once
-	s.runCmd = func(context.Context, string, ...string) (string, error) {
-		once.Do(func() { close(entered) })
-		<-release
-		return "", nil
-	}
+	s, release, entered := blockingSyncer(t, 1)
 	go func() { _, _ = s.Sync(context.Background(), "home") }()
 	<-entered
 	if _, err := s.Sync(context.Background(), "home"); !errors.Is(err, errSyncBusy) {
@@ -393,15 +395,8 @@ func TestWaitOutlivesARefusedConcurrentSync(t *testing.T) {
 // done. A pass that ran nothing of its own reports busy, so refresh joins
 // the pass in flight instead.
 func TestScheduledPassIsBusyWhenEveryAccountIs(t *testing.T) {
-	s, _ := testSyncer(t)
-	release := make(chan struct{})
 	// Both accounts, so the second pass finds every lock taken.
-	entered := make(chan struct{}, 2)
-	s.runCmd = func(context.Context, string, ...string) (string, error) {
-		entered <- struct{}{}
-		<-release
-		return "", nil
-	}
+	s, release, entered := blockingSyncer(t, 2)
 	go func() { _, _ = s.Sync(context.Background(), "") }()
 	<-entered
 	<-entered

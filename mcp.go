@@ -132,6 +132,7 @@ func newServer(cfg *Config, nm *Notmuch, maildir string) *Server {
 		status:    func() map[string]AccountStatus { return map[string]AccountStatus{} },
 		sync:      func(context.Context, string) (int, error) { return 0, nil },
 		syncWait:  func(context.Context, time.Duration) bool { return true },
+		syncKick:  func() {},
 	}
 }
 
@@ -323,18 +324,18 @@ func (s *Server) attachmentTool(ctx context.Context, _ *mcp.CallToolRequest, a a
 	// browser exists. Both replies quote the part's filename and content
 	// type, which the message's own MIME headers supplied, so they go
 	// through page like every other mail-derived string.
+	var fetch string
 	if s.publicURL == "" {
 		path, err := s.saveAttachment(a.ID, a.Part, raw)
 		if err != nil {
 			return nil, nil, err
 		}
-		return page(fmt.Sprintf(
-			"Part %d (%s, %s, %d bytes) is binary content, saved for you to fetch rather than returned inline:\n%s\nFrom the host: docker cp your-mail-mcp:%s .",
-			a.Part, ctype, filename, len(raw), path, path), 0, 0), nil, nil
+		fetch = fmt.Sprintf("saved for you to fetch rather than returned inline:\n%s\nFrom the host: docker cp your-mail-mcp:%s .", path, path)
+	} else {
+		fetch = fmt.Sprintf("served by link rather than inline. Download it (link valid %d minutes):\n%s",
+			int(attachmentLinkTTL.Minutes()), s.attachmentURL(a.ID, a.Part))
 	}
-	return page(fmt.Sprintf(
-		"Part %d (%s, %s, %d bytes) is binary content, served by link rather than inline. Download it (link valid %d minutes):\n%s",
-		a.Part, ctype, filename, len(raw), int(attachmentLinkTTL.Minutes()), s.attachmentURL(a.ID, a.Part)), 0, 0), nil, nil
+	return page(fmt.Sprintf("Part %d (%s, %s, %d bytes) is binary content, %s", a.Part, ctype, filename, len(raw), fetch), 0, 0), nil, nil
 }
 
 // saveAttachment writes one binary part where a local client can fetch it
@@ -533,9 +534,6 @@ func (s *Server) searchTool(ctx context.Context, _ *mcp.CallToolRequest, a searc
 // never passes through render, and it must never carry anything read from a
 // message. Empty when every account in scope is complete.
 func (s *Server) mirrorNote(ctx context.Context, account string) string {
-	if s.status == nil {
-		return ""
-	}
 	st := s.status()
 	var parts []string
 	for _, a := range s.cfg.Accounts {
@@ -866,6 +864,9 @@ func (s *Server) refreshTool(ctx context.Context, _ *mcp.CallToolRequest, a refr
 		n, err := s.sync(ctx, a.Account)
 		ch <- result{n, err}
 	}()
+	// One deadline for the whole call: joining a pass below waits for what
+	// is left of it, so the documented bound holds on that path too.
+	deadline := time.Now().Add(refreshWait)
 	var b strings.Builder
 	select {
 	case r := <-ch:
@@ -881,15 +882,13 @@ func (s *Server) refreshTool(ctx context.Context, _ *mcp.CallToolRequest, a refr
 		}
 		// Busy means a pass was already in flight, so join that one rather
 		// than tell the caller to come back later.
-		if joined && !s.syncWait(ctx, refreshWait) {
+		if joined && !s.syncWait(ctx, time.Until(deadline)) {
 			b.WriteString(s.inProgress())
 			break
 		}
 		// A pass has just finished either way, so the next scheduled one is
 		// a full interval from now.
-		if s.syncKick != nil {
-			s.syncKick()
-		}
+		s.syncKick()
 		if joined {
 			// No count: what that pass pulled was counted for the caller
 			// that started it, and a zero here would read as "no new mail".
@@ -897,21 +896,6 @@ func (s *Server) refreshTool(ctx context.Context, _ *mcp.CallToolRequest, a refr
 			break
 		}
 		fmt.Fprintf(&b, "%d new message(s)\n", r.n)
-		if a.Account == "" {
-			// A whole-fleet pass skips an account another pass already has,
-			// so the count above does not cover it. Naming it is the
-			// difference between "no new mail" and "not looked at yet".
-			var running []string
-			st := s.status()
-			for _, acct := range s.cfg.Accounts {
-				if st[acct.Name].Running {
-					running = append(running, acct.Name)
-				}
-			}
-			if len(running) > 0 {
-				fmt.Fprintf(&b, "joined a running sync for: %s\n", strings.Join(running, ", "))
-			}
-		}
 	case <-time.After(refreshWait):
 		b.WriteString(s.inProgress())
 	}

@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"net"
-	"os"
 )
 
 // errNoDaemon reports that nothing answered on the socket. A stale mcp.sock
@@ -15,14 +14,11 @@ import (
 // falls back to running the daemon itself, which clears the file.
 var errNoDaemon = errors.New("no daemon on the socket")
 
-// bridge attaches the calling client to a running daemon: stdin goes to the
-// socket, the socket comes back on stdout. It is a pipe, not a server, so a
-// docker exec'd stdio session shares the daemon's syncer and index instead
-// of starting its own. Returns when stdin closes or ctx is cancelled.
-func bridge(ctx context.Context, sock string) error {
-	return bridgeIO(ctx, sock, os.Stdin, os.Stdout)
-}
-
+// bridgeIO attaches the calling client to a running daemon: in (stdin) goes
+// to the socket, the socket comes back on out (stdout). It is a pipe, not a
+// server, so a docker exec'd stdio session shares the daemon's syncer and
+// index instead of starting its own. Returns when in closes or ctx is
+// cancelled.
 func bridgeIO(ctx context.Context, sock string, in io.Reader, out io.Writer) error {
 	conn, err := net.Dial("unix", sock)
 	if err != nil {
