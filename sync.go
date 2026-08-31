@@ -66,7 +66,7 @@ synchronize_flags=true
 // channelTail closes every generated channel. The first four lines are the
 // read-only guarantee; they must appear once per channel, and the directive
 // test counts them.
-const channelTail = "Sync Pull\nCreate Near\nRemove None\nExpunge None\nSyncState *\nCopyArrivalDate yes\n"
+const channelTail = "Sync Pull\nCreate Near\nRemove None\nExpunge %s\nSyncState *\nCopyArrivalDate yes\n"
 
 // genMbsyncrc writes two channels per account. The file is generated rather
 // than mounted for two reasons: the four read-only directives cannot be edited
@@ -87,6 +87,10 @@ func genMbsyncrc(cfg *Config, maildir string) string {
 			tls = "None"
 		}
 		local := filepath.Join(maildir, a.Name) + string(filepath.Separator)
+		expunge := "None"
+		if a.ExpungeLocal {
+			expunge = "Near"
+		}
 
 		b.WriteString("\nIMAPAccount " + a.Name + "\n")
 		b.WriteString("Host " + a.Host + "\n")
@@ -131,15 +135,14 @@ func genMbsyncrc(cfg *Config, maildir string) string {
 		}
 		b.WriteString("Patterns " + strings.Join(pats, " ") + "\n")
 		// The read-only guarantee. Do not add a blank line above this comment.
-		b.WriteString(channelTail)
+		b.WriteString(fmt.Sprintf(channelTail, expunge))
 
 		// A second, small channel so today's mail is searchable within
 		// minutes of a first run, while the full mirror takes as long as
 		// the provider's quota allows. MaxMessages fetches only the newest
 		// UIDs and ignores the rest; notmuch merges the overlap by
-		// Message-ID once the full channel catches up. Expiry under
-		// MaxMessages is near-side only and Expunge None keeps even that
-		// from deleting a file.
+		// Message-ID once the full channel catches up. MaxMessages expiry is
+		// near-side only.
 		recentLocal := filepath.Join(maildir, a.Name+"-recent") + string(filepath.Separator)
 		b.WriteString("\nMaildirStore " + a.Name + "-recent-local\n")
 		b.WriteString("Path " + recentLocal + "\n")
@@ -153,9 +156,9 @@ func genMbsyncrc(cfg *Config, maildir string) string {
 		// Without this, mbsync refuses to apply the cap to a mailbox holding
 		// more unread messages than it and skips the mailbox outright, which
 		// a real INBOX with a thousand unread mails does on day one. Expiry
-		// is still near-side only, and Expunge None keeps it from deleting.
+		// is still near-side only.
 		b.WriteString("ExpireUnread yes\n")
-		b.WriteString(channelTail)
+		b.WriteString(fmt.Sprintf(channelTail, expunge))
 	}
 	return b.String()
 }
@@ -364,7 +367,7 @@ func (s *Syncer) Sync(ctx context.Context, account string) (int, error) {
 			st.Running, st.StartedAt = true, time.Now()
 			s.status[a.Name] = st
 			s.mu.Unlock()
-			out, err := s.syncAccount(ctx, a.Name)
+			out, err := s.syncAccount(ctx, a.Name, a.ExpungeLocal)
 			s.record(a.Name, out, err)
 			resMu.Lock()
 			defer resMu.Unlock()
@@ -419,7 +422,7 @@ func (s *Syncer) Sync(ctx context.Context, account string) (int, error) {
 // channel behind a non-nil error and Complete would never be set. Running
 // them separately means a failed recent channel is just logged; only full's
 // result decides completion.
-func (s *Syncer) syncAccount(ctx context.Context, name string) (string, error) {
+func (s *Syncer) syncAccount(ctx context.Context, name string, expungeLocal bool) (string, error) {
 	// mbsync creates mailboxes inside a store, but not the store's own
 	// root, so a first run against a fresh volume fails with "cannot open
 	// store" until the directory exists. The recent channel is a second
@@ -433,11 +436,12 @@ func (s *Syncer) syncAccount(ctx context.Context, name string) (string, error) {
 	defer cancel()
 	// The recent channel exists to make today's mail searchable while the
 	// full mirror is still filling. Once full has completed it covers
-	// everything recent could, so the extra login per pass buys nothing.
+	// everything recent could, so the extra login per pass buys nothing unless
+	// the recent store needs to mirror local expunges.
 	s.mu.Lock()
 	complete := s.status[name].Complete
 	s.mu.Unlock()
-	if !complete {
+	if !complete || expungeLocal {
 		if _, err := s.runCmd(accountCtx, "mbsync", "-c", s.mbsyncConfig, name+"-recent"); err != nil {
 			fmt.Fprintf(os.Stderr, "sync: account %s: recent: %v\n", name, err)
 		}
