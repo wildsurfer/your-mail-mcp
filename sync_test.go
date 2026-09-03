@@ -53,6 +53,24 @@ func TestGenMbsyncrcIsPullOnlyForEveryAccount(t *testing.T) {
 	}
 }
 
+func TestGenMbsyncrcExpungeLocal(t *testing.T) {
+	cfg := &Config{Accounts: []Account{{
+		Name: "work", Host: "h", Port: 993, User: "u", Password: "p",
+		TLS: "imaps", Patterns: []string{"*"}, ExpungeLocal: true,
+	}}}
+	out := genMbsyncrc(cfg, "/mail")
+	for _, directive := range []string{"Sync Pull", "Create Near", "Remove None", "Expunge Near"} {
+		if got := strings.Count(out, directive); got != 2 {
+			t.Errorf("%q appears %d times, want once per channel", directive, got)
+		}
+	}
+	for _, forbidden := range []string{"Push", "Create Far", "Create Both", "Remove Near", "Remove Far", "Remove Both", "Expunge Far", "Expunge Both", "Expunge None"} {
+		if strings.Contains(out, forbidden) {
+			t.Errorf("generated configuration contains %q", forbidden)
+		}
+	}
+}
+
 // A blank line ends a section in mbsyncrc. One inside a Channel block turns the
 // four read-only directives into inert global options, silently.
 func TestGenMbsyncrcHasNoBlankLinesInsideSections(t *testing.T) {
@@ -195,6 +213,20 @@ func TestRecentChannelStopsOnceComplete(t *testing.T) {
 	want := []string{"home-recent", "home-full", "home-full"}
 	if strings.Join(*calls, " ") != strings.Join(want, " ") {
 		t.Fatalf("want recent only until the full mirror completes, got %v", *calls)
+	}
+}
+
+func TestRecentChannelKeepsDeletionMirrorCurrent(t *testing.T) {
+	s, calls := testSyncer(t)
+	s.cfg.Accounts[1].ExpungeLocal = true
+	for i := 0; i < 2; i++ {
+		if _, err := s.Sync(context.Background(), "home"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	want := []string{"home-recent", "home-full", "home-recent", "home-full"}
+	if strings.Join(*calls, " ") != strings.Join(want, " ") {
+		t.Fatalf("deletion mirror must keep both local stores current, got %v", *calls)
 	}
 }
 

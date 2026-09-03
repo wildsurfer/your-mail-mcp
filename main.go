@@ -32,6 +32,7 @@ type Account struct {
 	TLS            string   `json:"tls"`
 	Patterns       []string `json:"patterns"`
 	ExcludeFolders []string `json:"exclude_folders"`
+	ExpungeLocal   bool     `json:"expunge_local"`
 }
 
 type Config struct {
