@@ -126,9 +126,12 @@ accounts file into a private temporary directory the process owns and removes
 on exit, rather than mounted from the host. That directory is ordinary
 container filesystem, not a tmpfs: the compose file mounts none, so the file's
 protection is its 0600 mode and the container boundary, nothing more. One mbsync channel
-per account. The four directives that constitute the read-only guarantee —
-`Sync Pull`, `Create Near`, `Remove None`, `Expunge None` — are therefore written
-by the program, per channel, and cannot be edited into something that pushes.
+per account. The directives that constitute the read-only guarantee —
+`Sync Pull`, `Create Near`, `Remove None`, and an `Expunge` that may only be
+`None` (the default) or `Near` (an account with `expunge_local` set; it
+deletes only the local copy of mail already deleted on the server) — are
+therefore written by the program, per channel, and cannot be edited into
+something that pushes.
 
 This also removes a documented failure mode: a blank line inside a Channel block
 silently turns those four directives into inert global options, and nothing
@@ -532,16 +535,21 @@ skips any mailbox holding more unread messages than the cap, as a real INBOX
 does on day one), so it fetches the newest thousand UIDs
 and ignores the rest: minutes, not weeks. `full` covers every folder. They
 run as two mbsync invocations in that order inside the account's goroutine; a
-failure of `recent` is logged and does not stop `full`. Once an account is
-complete, `recent` is skipped on every later pass: `full` then covers
-everything it could, and the extra login per pass would buy nothing. notmuch
+failure of `recent` is logged and does not stop `full`. notmuch
 merges duplicates by Message-ID, so a message reached by both channels is one
-message in every result. `MaxMessages` expiry touches the near side only and
-`Expunge None` keeps even that from becoming a delete; the four read-only
-directives are unchanged and apply to both channels.
+message in every result. Once an account is complete, `recent` is skipped on
+every later pass and its store is deleted: `full` then covers everything it
+could, so the store's files are pure duplicates, and the extra login per pass
+would buy nothing. That deletion is the only place the program removes mail
+files, and the only path it is ever given is the account's own `-recent`
+store. `MaxMessages` expiry touches the near side only, and under the default
+`Expunge None` never deletes a file; the read-only directives are unchanged
+and apply to both channels.
 
 An account is `complete` once its `full` channel has exited 0 without hitting
-`SYNC_TIMEOUT`. Set once, never unset. Progress before that is the account's
+`SYNC_TIMEOUT`. Set once, never unset, and recorded as a per-account marker
+file in `INDEX` — the mirror-exists trick — so a restart does not rerun
+bootstrap against a finished mirror. Progress before that is the account's
 indexed message count, which `status` already reports. mbsync prints its
 pulled/total counter only to a console, and a remote total would need
 `STATUS` or `SELECT`; the `LIST`-only invariant stands.
@@ -564,8 +572,9 @@ returned instead.
 The live test gains one case: `docker run -i` of the shipped image with no
 environment answers `tools/list`. That is the property every directory
 checks. The live test proves the `recent` channel runs against a real IMAP
-server, creates its store, and that its mail is indexed and visible to
-account-scoped queries. It does not exercise the `MaxMessages` cap: its
+server — through its success log line, since the store it fills is deleted
+again once `full` covers it — and that this deletion happens in the shipped
+container. It does not exercise the `MaxMessages` cap: its
 server seeds a handful of messages, so a thousand-message boundary cannot be
 reached there. The cap's behaviour rests on the mbsync manual until a real
 account's recent maildir exceeds it.
