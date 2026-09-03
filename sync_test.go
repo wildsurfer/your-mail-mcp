@@ -216,17 +216,57 @@ func TestRecentChannelStopsOnceComplete(t *testing.T) {
 	}
 }
 
-func TestRecentChannelKeepsDeletionMirrorCurrent(t *testing.T) {
-	s, calls := testSyncer(t)
-	s.cfg.Accounts[1].ExpungeLocal = true
-	for i := 0; i < 2; i++ {
-		if _, err := s.Sync(context.Background(), "home"); err != nil {
-			t.Fatal(err)
-		}
+// The recent store is scaffolding; once the full channel has covered INBOX
+// it holds only duplicate files, so a clean full pass deletes it. Under
+// expunge_local this is also what keeps remotely-deleted mail from
+// surviving in the second store.
+func TestRecentStoreRemovedOnceComplete(t *testing.T) {
+	s, _ := testSyncer(t)
+	cur := filepath.Join(s.maildir, "home-recent", "INBOX", "cur")
+	if err := os.MkdirAll(cur, 0o700); err != nil {
+		t.Fatal(err)
 	}
-	want := []string{"home-recent", "home-full", "home-recent", "home-full"}
-	if strings.Join(*calls, " ") != strings.Join(want, " ") {
-		t.Fatalf("deletion mirror must keep both local stores current, got %v", *calls)
+	if err := os.WriteFile(filepath.Join(cur, "msg:2,S"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// A full pass: home's full channel succeeds, work's fails.
+	if _, err := s.Sync(context.Background(), ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(s.maildir, "home-recent")); !os.IsNotExist(err) {
+		t.Errorf("recent store still present after the full channel completed: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(s.maildir, "work-recent")); err != nil {
+		t.Errorf("incomplete account's recent store must survive: %v", err)
+	}
+}
+
+// Complete used to live only in memory, so every restart reran the recent
+// channel — and, now that completion deletes its store, would have
+// re-downloaded 1000 messages per restart just to delete them again.
+func TestCompleteSurvivesRestart(t *testing.T) {
+	s, _ := testSyncer(t)
+	if _, err := s.Sync(context.Background(), "home"); err != nil {
+		t.Fatal(err)
+	}
+	restarted := newSyncer(s.cfg, s.maildir, s.index, "/tmp/mbsyncrc", nil)
+	var calls []string
+	restarted.runCmd = func(_ context.Context, _ string, args ...string) (string, error) {
+		calls = append(calls, args[len(args)-1])
+		return "", nil
+	}
+	restarted.reindex = func(context.Context) (int, error) { return 0, nil }
+	if !restarted.Status()["home"].Complete {
+		t.Fatal("Complete did not survive the restart")
+	}
+	if restarted.Status()["work"].Complete {
+		t.Fatal("the never-completed account must stay incomplete")
+	}
+	if _, err := restarted.Sync(context.Background(), "home"); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(calls, " ") != "home-full" {
+		t.Fatalf("recent channel ran after a restart of a complete account: %v", calls)
 	}
 }
 
@@ -246,13 +286,13 @@ func TestNotCompleteWhenFullFails(t *testing.T) {
 
 // TestSyncCreatesBothStoreRoots guards the failure only the live test caught:
 // mbsync creates mailboxes inside a store but never the store's own root, and
-// the recent channel is a second store with a second root.
+// the recent channel is a second store with a second root. It uses the
+// account whose full channel fails, since a full channel that succeeds now
+// deletes the recent root again in the same pass.
 func TestSyncCreatesBothStoreRoots(t *testing.T) {
 	s, _ := testSyncer(t)
-	if _, err := s.Sync(context.Background(), "home"); err != nil {
-		t.Fatal(err)
-	}
-	for _, dir := range []string{"home", "home-recent"} {
+	_, _ = s.Sync(context.Background(), "work")
+	for _, dir := range []string{"work", "work-recent"} {
 		if _, err := os.Stat(filepath.Join(s.maildir, dir)); err != nil {
 			t.Errorf("mbsync store root: %v", err)
 		}

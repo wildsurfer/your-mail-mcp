@@ -205,6 +205,14 @@ var errSyncBusy = errors.New("sync already running")
 // boundary to still be there when the maildir isn't.
 const mirrorSentinel = "mirror-exists"
 
+// completeMarker names the per-account file, in the same index directory,
+// recording that the account's full channel has exited 0 at least once.
+// Without it a restart forgets bootstrap ever finished, reruns the recent
+// channel and recreates the store syncAccount deletes once full covers it.
+func completeMarker(index, name string) string {
+	return filepath.Join(index, "complete-"+name)
+}
+
 type Syncer struct {
 	cfg          *Config
 	maildir      string
@@ -258,6 +266,14 @@ func execCommand(ctx context.Context, name string, args ...string) (string, erro
 }
 
 func newSyncer(cfg *Config, maildir, index, mbsyncConfig string, nm *Notmuch) *Syncer {
+	// Completion survives restarts through the marker files; see
+	// completeMarker. A wiped index directory simply reruns bootstrap.
+	status := map[string]AccountStatus{}
+	for _, a := range cfg.Accounts {
+		if _, err := os.Stat(completeMarker(index, a.Name)); err == nil {
+			status[a.Name] = AccountStatus{Complete: true}
+		}
+	}
 	return &Syncer{
 		cfg:          cfg,
 		maildir:      maildir,
@@ -268,7 +284,7 @@ func newSyncer(cfg *Config, maildir, index, mbsyncConfig string, nm *Notmuch) *S
 		accountLocks: accountLocks(cfg),
 		kick:         make(chan struct{}, 1),
 		mountPoint:   isMountPoint,
-		status:       map[string]AccountStatus{},
+		status:       status,
 		runCmd:       execCommand,
 		reindex: func(ctx context.Context) (int, error) {
 			// A missing database is the normal state on a first run: notmuch
@@ -367,7 +383,7 @@ func (s *Syncer) Sync(ctx context.Context, account string) (int, error) {
 			st.Running, st.StartedAt = true, time.Now()
 			s.status[a.Name] = st
 			s.mu.Unlock()
-			out, err := s.syncAccount(ctx, a.Name, a.ExpungeLocal)
+			out, err := s.syncAccount(ctx, a.Name)
 			s.record(a.Name, out, err)
 			resMu.Lock()
 			defer resMu.Unlock()
@@ -422,12 +438,19 @@ func (s *Syncer) Sync(ctx context.Context, account string) (int, error) {
 // channel behind a non-nil error and Complete would never be set. Running
 // them separately means a failed recent channel is just logged; only full's
 // result decides completion.
-func (s *Syncer) syncAccount(ctx context.Context, name string, expungeLocal bool) (string, error) {
+func (s *Syncer) syncAccount(ctx context.Context, name string) (string, error) {
+	s.mu.Lock()
+	complete := s.status[name].Complete
+	s.mu.Unlock()
 	// mbsync creates mailboxes inside a store, but not the store's own
 	// root, so a first run against a fresh volume fails with "cannot open
 	// store" until the directory exists. The recent channel is a second
-	// store and needs its own.
-	for _, dir := range []string{name, name + "-recent"} {
+	// store and needs its own only while bootstrap still runs it.
+	dirs := []string{name}
+	if !complete {
+		dirs = append(dirs, name+"-recent")
+	}
+	for _, dir := range dirs {
 		if err := os.MkdirAll(filepath.Join(s.maildir, dir), 0o700); err != nil {
 			return "", err
 		}
@@ -436,17 +459,32 @@ func (s *Syncer) syncAccount(ctx context.Context, name string, expungeLocal bool
 	defer cancel()
 	// The recent channel exists to make today's mail searchable while the
 	// full mirror is still filling. Once full has completed it covers
-	// everything recent could, so the extra login per pass buys nothing unless
-	// the recent store needs to mirror local expunges.
-	s.mu.Lock()
-	complete := s.status[name].Complete
-	s.mu.Unlock()
-	if !complete || expungeLocal {
+	// everything recent could, so the extra login per pass buys nothing.
+	if !complete {
 		if _, err := s.runCmd(accountCtx, "mbsync", "-c", s.mbsyncConfig, name+"-recent"); err != nil {
 			fmt.Fprintf(os.Stderr, "sync: account %s: recent: %v\n", name, err)
+		} else {
+			// The one success log in the sync path. It is the live test's
+			// proof that the shipped mbsync accepts the recent channel's
+			// directives, since the store it used to inspect for that is
+			// deleted below the moment full covers it.
+			fmt.Fprintf(os.Stderr, "sync: account %s: recent: ok\n", name)
 		}
 	}
 	out, err := s.runCmd(accountCtx, "mbsync", "-c", s.mbsyncConfig, name+"-full")
+	if err == nil {
+		// The recent store is bootstrap scaffolding: after full's first
+		// clean exit its files are duplicates notmuch had merged by
+		// Message-ID, costing disk and — under expunge_local — an extra
+		// login per pass to keep honest, so it is deleted. This RemoveAll
+		// is the only place the program deletes mail files, and the only
+		// path it may ever be given is the account's own "-recent" store.
+		// It runs on every clean pass, so a failed removal heals on the
+		// next one, and it is a no-op once the store is gone.
+		if rmErr := os.RemoveAll(filepath.Join(s.maildir, name+"-recent")); rmErr != nil {
+			fmt.Fprintf(os.Stderr, "sync: account %s: removing recent store: %v\n", name, rmErr)
+		}
+	}
 	if err != nil && accountCtx.Err() != nil && ctx.Err() == nil {
 		// exec kills mbsync when the deadline passes, so what comes back is
 		// an ExitError reading "signal: killed", never the context error.
@@ -554,7 +592,12 @@ func (s *Syncer) record(account, out string, err error) {
 		st.LastSync = time.Now()
 		st.Failures = 0
 		st.NextRetry = time.Time{}
-		st.Complete = true
+		if !st.Complete {
+			st.Complete = true
+			// Best-effort, like mirrorSentinel: losing the marker costs
+			// one redundant recent-channel run after the next restart.
+			_ = os.WriteFile(completeMarker(s.index, account), nil, 0o600)
+		}
 	}
 	s.status[account] = st
 }

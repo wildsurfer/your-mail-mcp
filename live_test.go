@@ -299,12 +299,21 @@ func TestLive(t *testing.T) {
 
 	// The recent channel is its own mbsync invocation into its own store, and
 	// MaxMessages there has only ever been read about, never run against a
-	// server. Its maildir holds messages only if that invocation worked.
-	ls := liveComposeOutput(t, "exec", "-T", "your-mail-mcp", "ls", "-R", "/mail")
-	// ls -R prints a "dir:" header per directory and a blank line after each
-	// listing, so a directory with nothing in it is a header and no entries.
-	if _, after, found := strings.Cut(ls, "/mail/testbox-recent/INBOX/new:\n"); !found || strings.HasPrefix(after, "\n") {
-		t.Fatalf("the recent channel pulled no mail into its own maildir; ls -R /mail:\n%s", ls)
+	// server. The store is deleted once full covers it, so its contents can
+	// no longer prove the invocation worked; the "recent: ok" log line is
+	// that proof now, and the store being gone proves the deletion ran
+	// against the real container. Looped, because the pass that satisfies
+	// both may still be finishing.
+	for {
+		logs := liveComposeOutput(t, "logs", "your-mail-mcp")
+		ls := liveComposeOutput(t, "exec", "-T", "your-mail-mcp", "ls", "/mail")
+		if strings.Contains(logs, "recent: ok") && !strings.Contains(ls, "testbox-recent") {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("no recent-channel success with a deleted store; logs:\n%s\nls /mail:\n%s", logs, ls)
+		}
+		time.Sleep(2 * time.Second)
 	}
 
 	// attachment, end to end and past the inline cap: the part comes back
