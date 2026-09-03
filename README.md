@@ -350,13 +350,22 @@ taken from a README, is in
 Read this before you point it at a mailbox you care about.
 
 **It cannot write.** The generated mbsync configuration for every account
-carries `Sync Pull`, `Create Near`, `Remove None`, `Expunge None`, and the
-program writes that file itself, so nothing in it can be edited into a push.
+carries `Sync Pull`, `Create Near`, `Remove None` and `Expunge None` (or,
+for an account with `expunge_local` set, `Expunge Near`, which deletes local
+files only), and the program writes that file itself, so nothing in it can
+be edited into a push.
 The only IMAP operation in the Go code is `LIST`, issued per account at
 startup and hourly to find the junk and trash folders; an account with
 `exclude_folders` set by hand skips even that. The process has no path that
 sends, deletes, moves or tags a message, and nothing in it holds write
 access to any account.
+
+**Deleted mail stays in the mirror.** Mail you delete on the server is kept
+on disk and hidden from search through notmuch's `deleted` tag. Set
+`expunge_local: true` on an account to physically remove those local copies
+instead. The account is still never written to, but the mirror then stops
+being a backup: whatever disappears remotely disappears locally on the next
+pass.
 
 **How proven this is.** One author, one operator, three real accounts: one
 iCloud and two Gmail. No third-party security review, and nobody else has

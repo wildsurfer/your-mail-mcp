@@ -42,7 +42,7 @@ Per-account keys:
 | `tls` | `imaps` | `imaps`, `starttls`, or `none`. |
 | `patterns` | `["*"]` | mbsync folder patterns — which folders to mirror. |
 | `exclude_folders` | discovered automatically | Folder names to exclude from search by default (see [SPECIAL-USE discovery](#troubleshooting)). Setting this overrides discovery entirely for that account. |
-| `expunge_local` | `false` | Set to `true` to physically remove near-side Maildir copies after a message disappears remotely. This generates `Expunge Near`; the IMAP side remains protected by `Sync Pull`, `Create Near`, and `Remove None`. Whole remote folder deletion is not propagated. |
+| `expunge_local` | `false` | Set to `true` to physically remove near-side Maildir copies after a message disappears remotely. This generates `Expunge Near`; the IMAP side remains protected by `Sync Pull`, `Create Near`, and `Remove None`. Whole remote folder deletion is not propagated. With this set the mirror stops being a backup: mail deleted remotely, including by a compromised account being emptied, is removed locally on the next pass. With the default `false`, deleted mail stays on disk and is only hidden from search by the `deleted` tag. |
 
 An account name must be unique. With no accounts file, or an empty
 `accounts` array, the server still starts and the `status` tool says so;
