@@ -1,16 +1,21 @@
-# Upgrading from 0.2.x
+# Upgrading from 0.3.x
 
-The image now starts in stdio mode when it is given no command, so a compose
-file without a `command:` line gets a container that reads end of input and
-exits at once, over and over. Add `command: serve` to the service before you
-pull the new image. The `compose.yaml` in this repository already has it.
+Nothing to do. Pull the image and restart; the accounts file, the environment
+variables and the tools are the same.
 
-Two directories appear by themselves after the upgrade. The mail volume gains
-a `<name>-recent/` per account, an INBOX-only mirror capped at 1000 messages
-that fills within minutes while the full history catches up, so the first
-sync after the upgrade pulls those messages again. The index volume gains
-`mcp.sock`, the socket local clients attach to, and `attachments/`, where
-binary parts are written when there is no HTTP listener to link them from.
+Two things change by themselves on the first sync after the upgrade. The
+`<name>-recent/` directory in the mail volume is deleted once an account's
+full mirror has completed, because everything in it is a duplicate of the
+full mirror by then. The index volume gains a `complete-<name>` marker file
+per account, which is how completion now survives a restart: before this
+release it lived only in memory, so every restart ran the INBOX-only recent
+channel again against a finished mirror.
 
-Nothing else changes. The accounts file, the environment variables and the
-tools are the same.
+An account whose full mirror has not completed yet keeps its recent store and
+its extra login per pass, exactly as before, until the first full pass
+succeeds.
+
+New in this release, and off unless you ask for it: `expunge_local` on an
+account. See
+[the accounts file](reference.md#the-accounts-file) for what it does and what
+it costs.
