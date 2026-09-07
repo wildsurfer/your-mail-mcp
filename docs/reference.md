@@ -122,7 +122,7 @@ all. With compose that means the volume or bind mount is missing from
 **The container exits at once, over and over.** The image starts in `stdio`
 mode when it is given no command, reads end of input and exits. A compose
 file needs `command: serve`; the one in this repository has it. See
-[Upgrading from 0.2.x](upgrading.md).
+[Upgrading from 0.3.x](upgrading.md).
 
 **Check per-account sync status with the `status` and `folders` tools.**
 `status` reports, per account, whether the full mirror is complete, the last

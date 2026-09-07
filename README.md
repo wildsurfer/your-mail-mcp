@@ -37,7 +37,9 @@ A self-hosted MCP server. It mirrors one or more IMAP accounts into a local
 maildir with [mbsync](https://isync.sourceforge.io/), indexes them with
 [notmuch](https://notmuchmail.org/), and answers tool calls from that index.
 The Claude and ChatGPT apps attach over HTTPS with OAuth; Claude Code, Codex,
-Cursor and Claude Desktop attach over stdio on the same machine.
+Cursor and Claude Desktop attach over stdio on the same machine. Any MCP
+client works, so if you want full privacy you can attach one backed by a
+local LLM and your mail never leaves your machine.
 
 ![How your-mail-mcp works: mail is pulled from IMAP providers into a local mirror, indexed by notmuch, and served to an MCP client through an OAuth gate, with no write path back to the providers](docs/diagrams/how-it-works.png)
 
@@ -418,6 +420,6 @@ order of how much each buys you.
   what they shell out to.
 - [Running it on a server](docs/server.md): install script, hardening, your
   own domain with Caddy.
-- [Upgrading from 0.2.x](docs/upgrading.md).
+- [Upgrading from 0.3.x](docs/upgrading.md).
 - [Design spec](docs/specs/2026-08-19-your-mail-mcp-design.md) and
   [the survey of email MCP servers](docs/research/email-mcp-landscape.md).

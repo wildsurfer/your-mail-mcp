@@ -485,7 +485,7 @@ func run(ctx context.Context, stdio bool) error {
 	// asked for by hand is not followed by a scheduled one moments later.
 	go runResettableTicker(ctx, e.SyncInterval, syncer.kick, sync)
 
-	m := mcp.NewServer(&mcp.Implementation{Name: "your-mail-mcp", Version: "0.3.0"}, nil)
+	m := mcp.NewServer(&mcp.Implementation{Name: "your-mail-mcp", Version: "0.4.0"}, nil)
 	srv.registerTools(m)
 
 	sock := filepath.Join(e.Index, "mcp.sock")
