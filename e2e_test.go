@@ -134,6 +134,30 @@ func TestEndToEndRegisterAuthorizeTokenCall(t *testing.T) {
 		t.Errorf("got %d tools, want 11", len(tools.Tools))
 	}
 
+	// Every parameter carries its own description, from the jsonschema tag on
+	// the argument struct. A bare typed property tells a model nothing about
+	// what to put in it, and directory scanners score tool definitions on
+	// exactly this.
+	for _, tool := range tools.Tools {
+		raw, err := json.Marshal(tool.InputSchema)
+		if err != nil {
+			t.Fatalf("tool %s: %v", tool.Name, err)
+		}
+		var schema struct {
+			Properties map[string]struct {
+				Description string `json:"description"`
+			} `json:"properties"`
+		}
+		if err := json.Unmarshal(raw, &schema); err != nil {
+			t.Fatalf("tool %s: %v", tool.Name, err)
+		}
+		for name, prop := range schema.Properties {
+			if prop.Description == "" {
+				t.Errorf("tool %s: parameter %q has no description", tool.Name, name)
+			}
+		}
+	}
+
 	res, err := session.CallTool(ctx, &mcp.CallToolParams{
 		Name:      "count",
 		Arguments: map[string]any{"query": "*", "account": "personal"},

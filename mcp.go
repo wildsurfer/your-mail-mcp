@@ -136,18 +136,22 @@ func newServer(cfg *Config, nm *Notmuch, maildir string) *Server {
 	}
 }
 
+// The jsonschema tag on each field becomes that property's description in the
+// tool's input schema. They are the only documentation a model gets for what
+// to put in a parameter, so they say what the value means and what happens
+// when it is left out, not just what type it is.
 type queryArgs struct {
-	Query           string `json:"query"`
-	Account         string `json:"account,omitempty"`
-	IncludeExcluded bool   `json:"include_excluded,omitempty"`
+	Query           string `json:"query" jsonschema:"notmuch query, for example from:alice@example.com and date:2026-01-01..2026-06-30. Terms: from: to: subject: tag: folder: attachment: date:, combined with and/or/not. A bare word matches anywhere in the message."`
+	Account         string `json:"account,omitempty" jsonschema:"Limit the search to one account, named as folders and status report it. Omit to search every account at once."`
+	IncludeExcluded bool   `json:"include_excluded,omitempty" jsonschema:"Set true to also search the junk and trash folders, which are left out by default. Use it only when a message is expected to be there, since mail in those folders is more likely to be hostile."`
 }
 
 type searchArgs struct {
-	Query           string `json:"query"`
-	Account         string `json:"account,omitempty"`
-	IncludeExcluded bool   `json:"include_excluded,omitempty"`
-	Limit           int    `json:"limit,omitempty"`
-	Offset          int    `json:"offset,omitempty"`
+	Query           string `json:"query" jsonschema:"notmuch query, for example from:alice@example.com and date:2026-01-01..2026-06-30. Terms: from: to: subject: tag: folder: attachment: date:, combined with and/or/not. A bare word matches anywhere in the message."`
+	Account         string `json:"account,omitempty" jsonschema:"Limit the search to one account, named as folders and status report it. Omit to search every account at once."`
+	IncludeExcluded bool   `json:"include_excluded,omitempty" jsonschema:"Set true to also search the junk and trash folders, which are left out by default. Use it only when a message is expected to be there, since mail in those folders is more likely to be hostile."`
+	Limit           int    `json:"limit,omitempty" jsonschema:"How many threads to return, newest first. Defaults to 50 when omitted."`
+	Offset          int    `json:"offset,omitempty" jsonschema:"How many threads to skip before returning results, for paging through a large result set. Defaults to 0."`
 }
 
 // setExcluded replaces one account's excluded-folder list. Called at startup
@@ -272,8 +276,8 @@ func (s *Server) knownAccount(name string) error {
 const attachmentCap = 5 << 20
 
 type attachmentArgs struct {
-	ID   string `json:"id"`
-	Part int    `json:"part"`
+	ID   string `json:"id" jsonschema:"Message-ID of the message holding the part, as search, ids and show report it, with or without the surrounding angle brackets."`
+	Part int    `json:"part" jsonschema:"Which MIME part to return, numbered as show's output lists them. Part 0 is the whole message."`
 }
 
 // attachmentTool returns one MIME part's decoded bytes. notmuch does the MIME
@@ -649,10 +653,10 @@ func (s *Server) countTool(ctx context.Context, _ *mcp.CallToolRequest, a queryA
 }
 
 type idArgs struct {
-	ID              string `json:"id"`
-	Offset          int    `json:"offset,omitempty"`
-	Limit           int    `json:"limit,omitempty"`
-	IncludeExcluded bool   `json:"include_excluded,omitempty"`
+	ID              string `json:"id" jsonschema:"Message-ID of the message, as search, ids and show report it, with or without the surrounding angle brackets."`
+	Offset          int    `json:"offset,omitempty" jsonschema:"Byte offset to resume the text from. Use the offset named in a [truncated] marker to read the next chunk of a long message. Defaults to 0, the start."`
+	Limit           int    `json:"limit,omitempty" jsonschema:"How many bytes of text to return at most. Defaults to 65536, which is also the ceiling."`
+	IncludeExcluded bool   `json:"include_excluded,omitempty" jsonschema:"Set true to read a message that lives in junk or trash, which are left out by default. Use it only when the message is expected to be there, since mail in those folders is more likely to be hostile."`
 }
 
 // messageQuery turns a Message-ID into a notmuch query. The id arrives from the
@@ -884,7 +888,7 @@ func (s *Server) foldersTool(ctx context.Context, _ *mcp.CallToolRequest, _ stru
 }
 
 type refreshArgs struct {
-	Account string `json:"account,omitempty"`
+	Account string `json:"account,omitempty" jsonschema:"Sync one account, named as folders and status report it. Omit to sync every account."`
 }
 
 // refreshTool runs the same full pass the ticker runs, over every folder of
