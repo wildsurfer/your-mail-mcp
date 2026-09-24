@@ -375,7 +375,7 @@ func main() {
 	// "serve" is the daemon. Anything else, including no argument, is stdio,
 	// so a bare "docker run -i image" speaks MCP on stdin, which is what
 	// every client and directory expects.
-	sock := filepath.Join(os.Getenv("INDEX"), "mcp.sock")
+	sock := socketPath()
 	_, statErr := os.Stat(sock)
 	var err error
 	switch {
@@ -395,6 +395,15 @@ func main() {
 		fmt.Fprintln(os.Stderr, "your-mail-mcp:", err)
 		os.Exit(1)
 	}
+}
+
+// socketPath is where the daemon listens for local sessions. It lives in the
+// container's own filesystem, never on a mounted volume: Docker Desktop's
+// file sharing refuses to bind a Unix socket on a host directory ("bind:
+// operation not supported"), and every docker exec session shares the
+// container's /tmp anyway.
+func socketPath() string {
+	return filepath.Join(os.TempDir(), "your-mail-mcp.sock")
 }
 
 func run(ctx context.Context, stdio bool) error {
@@ -488,7 +497,7 @@ func run(ctx context.Context, stdio bool) error {
 	m := mcp.NewServer(&mcp.Implementation{Name: "your-mail-mcp", Version: "0.4.0"}, nil)
 	srv.registerTools(m)
 
-	sock := filepath.Join(e.Index, "mcp.sock")
+	sock := socketPath()
 	// serveSocket removes the socket when it returns, but that is a
 	// goroutine racing process exit; removing it here as well means a clean
 	// shutdown never leaves a file for the next start to dial into.
@@ -528,7 +537,13 @@ func run(ctx context.Context, stdio bool) error {
 	}()
 	fmt.Fprintf(os.Stderr, "listening on %s\n", e.ListenAddr)
 	if err := httpSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-		return err
+		if !stdio {
+			return err
+		}
+		// A stdio session running the daemon itself, next to a daemon that
+		// already holds the port, still has a client on stdin to serve.
+		fmt.Fprintln(os.Stderr, "http:", err)
+		<-ctx.Done()
 	}
 	return nil
 }

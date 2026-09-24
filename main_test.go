@@ -583,3 +583,43 @@ func TestRunRefusesPublicURLWithoutPassphrase(t *testing.T) {
 		t.Fatalf("want the passphrase refusal, got %v", err)
 	}
 }
+
+// A stdio session that falls back to running the daemon itself, inside a
+// container whose real daemon already holds the HTTP port, must keep serving
+// its client. It used to exit on "address already in use", which the client
+// saw as the connection closing for no reason.
+func TestRunStdioSurvivesTakenHTTPPort(t *testing.T) {
+	taken, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer taken.Close()
+	t.Setenv("CONFIG", filepath.Join(t.TempDir(), "missing.json"))
+	t.Setenv("MAILDIR", t.TempDir())
+	t.Setenv("INDEX", t.TempDir())
+	t.Setenv("PUBLIC_URL", "https://mail.example.com")
+	t.Setenv("OAUTH_PASSPHRASE", "test passphrase")
+	t.Setenv("LISTEN_ADDR", taken.Addr().String())
+	// An open pipe stands in for a client that is still attached.
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w.Close()
+	stdin := os.Stdin
+	os.Stdin = r
+	defer func() { os.Stdin = stdin }()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- run(ctx, true) }()
+	select {
+	case err := <-done:
+		t.Fatalf("run exited while its client was still attached: %v", err)
+	case <-time.After(500 * time.Millisecond):
+	}
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}

@@ -8,7 +8,7 @@ import (
 	"net"
 )
 
-// errNoDaemon reports that nothing answered on the socket. A stale mcp.sock
+// errNoDaemon reports that nothing answered on the socket. A stale socket file
 // outlives an unclean exit and looks exactly like a live daemon to main's
 // mode check, so the dial failure is wrapped rather than returned raw: main
 // falls back to running the daemon itself, which clears the file.
