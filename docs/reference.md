@@ -40,6 +40,7 @@ Per-account keys:
 | `user` | — | Required. See [Provider notes](#provider-notes): iCloud wants the short name, not the full email address. |
 | `password` | — | Required. `${VAR}` expands from the environment; a literal password also works but is not recommended. |
 | `tls` | `imaps` | `imaps`, `starttls`, or `none`. |
+| `auth_mechs` | negotiated | SASL mechanisms mbsync may offer, as a list of names (`["PLAIN"]`), written as `AuthMechs`. Leave unset unless login fails: a server that advertises `OAUTHBEARER`/`XOAUTH2` next to `PLAIN` can make the SASL library pick OAuth and fail with `Unable to find a callback` although a password login would work. See [Provider notes](#provider-notes). |
 | `patterns` | `["*"]` | mbsync folder patterns — which folders to mirror. |
 | `exclude_folders` | discovered automatically | Folder names to exclude from search by default (see [SPECIAL-USE discovery](#troubleshooting)). Setting this overrides discovery entirely for that account. |
 | `expunge_local` | `false` | Set to `true` to physically remove near-side Maildir copies after a message disappears remotely. This generates `Expunge Near`; the IMAP side remains protected by `Sync Pull`, `Create Near`, and `Remove None`. Whole remote folder deletion is not propagated. With this set the mirror stops being a backup: mail deleted remotely, including by a compromised account being emptied, is removed locally on the next pass. With the default `false`, deleted mail stays on disk and is only hidden from search by the `deleted` tag. |
@@ -99,6 +100,13 @@ through this server yet.
   server keeps retrying on its schedule and mbsync resumes where it
   stopped. Set `SYNC_TIMEOUT` to something like `8h` for the first mirror
   so a long run is not cut off by the default one-hour deadline.
+- **Providers advertising OAuth mechanisms** (`AUTH=OAUTHBEARER`,
+  `AUTH=XOAUTH2`) beside `PLAIN` and `LOGIN`: with macOS's system libsasl2
+  (the Homebrew `isync` links it) mbsync picks OAUTHBEARER and fails with
+  `SASL(-1): generic failure: Unable to find a callback`. Set
+  `"auth_mechs": ["PLAIN"]` on the account. The container's Cyrus SASL has
+  not shown the problem. `openssl s_client -connect host:993` followed by
+  `a CAPABILITY` shows what a server advertises.
 - **Dovecot** servers (many self-hosted and smaller providers) commonly
   prefix folder names with `INBOX.` (e.g. `INBOX.Sent`). If `folders` shows
   folder names you didn't expect, this is usually why.

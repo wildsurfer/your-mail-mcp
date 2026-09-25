@@ -30,6 +30,7 @@ type Account struct {
 	User           string   `json:"user"`
 	Password       string   `json:"password"`
 	TLS            string   `json:"tls"`
+	AuthMechs      []string `json:"auth_mechs"`
 	Patterns       []string `json:"patterns"`
 	ExcludeFolders []string `json:"exclude_folders"`
 	ExpungeLocal   bool     `json:"expunge_local"`
@@ -98,6 +99,9 @@ func loadConfig(path string) (*Config, error) {
 		for j, f := range a.ExcludeFolders {
 			a.ExcludeFolders[j] = expandBracedEnv(f)
 		}
+		for j, m := range a.AuthMechs {
+			a.AuthMechs[j] = expandBracedEnv(m)
+		}
 		if a.Name == "" || strings.ContainsAny(a.Name, `/\ "'`) {
 			return nil, fmt.Errorf("account %d: name must be non-empty and free of spaces, quotes and slashes", i)
 		}
@@ -125,6 +129,15 @@ func loadConfig(path string) (*Config, error) {
 		}
 		if a.Password == "" {
 			return nil, fmt.Errorf("account %q: password is empty; is the referenced environment variable set?", a.Name)
+		}
+		// A mechanism is one SASL token (PLAIN, LOGIN, XOAUTH2 ...) or "*".
+		// The names go on one AuthMechs line separated by spaces, so a
+		// space inside one would silently become two mechanisms, and a
+		// quote or backslash would break the generated line.
+		for _, m := range a.AuthMechs {
+			if m == "" || hasWhitespaceOrControl(m) || strings.ContainsAny(m, `"\`) {
+				return nil, fmt.Errorf("account %q: auth_mechs entries must be single SASL mechanism names such as PLAIN", a.Name)
+			}
 		}
 		switch a.TLS {
 		case "":

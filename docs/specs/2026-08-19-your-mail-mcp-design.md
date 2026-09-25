@@ -92,7 +92,10 @@ reintroduced by habit:
   matters when another mail client reads the same maildir, and nothing does.
 - **`AuthMechs` is left unset**, so mbsync negotiates. The reference implementation
   pinned `LOGIN` for iCloud without evidence it was required. If a real server
-  fails during testing, it comes back as a per-account key.
+  fails during testing, it comes back as a per-account key — and one did: a
+  server advertising OAUTHBEARER beside PLAIN, where mbsync built against
+  macOS's libsasl2 picks it and fails. `auth_mechs` on the account writes the
+  line for that account only; every other account keeps negotiating.
 
 ## 1. Shape
 
