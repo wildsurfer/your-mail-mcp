@@ -983,6 +983,30 @@ func TestGenMbsyncrcForcesLoginOnlyWhenUnencrypted(t *testing.T) {
 	}
 }
 
+// auth_mechs is the per-account key the spec reserved for a real server that
+// fails negotiation: one advertising OAUTHBEARER and XOAUTH2 beside PLAIN,
+// where macOS's system libsasl2 picks OAUTHBEARER and fails for want of a
+// token callback; pinning PLAIN logs in.
+func TestGenMbsyncrcWritesConfiguredAuthMechs(t *testing.T) {
+	out := genMbsyncrc(&Config{Accounts: []Account{
+		{Name: "a", Host: "h", Port: 993, User: "u", Password: "p", TLS: "imaps", Patterns: []string{"*"}, AuthMechs: []string{"PLAIN", "LOGIN"}},
+	}}, "/mail")
+	if !strings.Contains(out, "\nAuthMechs PLAIN LOGIN\n") {
+		t.Errorf("configured mechanisms missing from:\n%s", out)
+	}
+	if strings.Count(out, "AuthMechs") != 1 {
+		t.Errorf("want exactly one AuthMechs line, got %d", strings.Count(out, "AuthMechs"))
+	}
+
+	// An explicit list wins over the LOGIN that tls:none would otherwise force.
+	plain := genMbsyncrc(&Config{Accounts: []Account{
+		{Name: "a", Host: "h", Port: 143, User: "u", Password: "p", TLS: "none", Patterns: []string{"*"}, AuthMechs: []string{"PLAIN"}},
+	}}, "/mail")
+	if !strings.Contains(plain, "\nAuthMechs PLAIN\n") || strings.Contains(plain, "AuthMechs LOGIN") {
+		t.Errorf("configured mechanisms must replace the tls:none default, got:\n%s", plain)
+	}
+}
+
 func TestExcludedFoldersUnionsSpecialUseWithKnownNames(t *testing.T) {
 	// iCloud in the field: LIST marks only \Trash ("Deleted Messages"), while
 	// the junk folder is present by name alone. Both must be excluded.
