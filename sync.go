@@ -73,9 +73,12 @@ const channelTail = "Sync Pull\nCreate Near\nRemove None\nExpunge %s\nSyncState 
 // into something that pushes, and a stray blank line cannot silently demote
 // them to global options.
 //
-// The password is written into the file. The file lives on the ordinary
-// container filesystem, in a directory only this process writes to, at mode
-// 0600, so it is no more exposed than the environment it came from.
+// The password is written into the file, unless the account sets pass_cmd:
+// then the file carries the command as PassCmd and mbsync runs it for the
+// password at connect time, so nothing this process writes to disk holds the
+// secret. With a literal password the file lives on the ordinary container
+// filesystem, in a directory only this process writes to, at mode 0600, so it
+// is no more exposed than the environment it came from.
 func genMbsyncrc(cfg *Config, maildir string) string {
 	var b strings.Builder
 	b.WriteString("# generated at startup; edits are discarded on restart\n")
@@ -96,7 +99,13 @@ func genMbsyncrc(cfg *Config, maildir string) string {
 		b.WriteString("Host " + a.Host + "\n")
 		b.WriteString("Port " + strconv.Itoa(a.Port) + "\n")
 		b.WriteString("User " + a.User + "\n")
-		b.WriteString("Pass " + quoteMbsync(a.Password) + "\n")
+		if a.PassCmd != "" {
+			// mbsync runs the command through /bin/sh and takes its output,
+			// less one trailing newline, as the password.
+			b.WriteString("PassCmd " + quoteMbsync(a.PassCmd) + "\n")
+		} else {
+			b.WriteString("Pass " + quoteMbsync(a.Password) + "\n")
+		}
 		// SSLType, not TLSType: TLSType only exists in isync 1.5+, while
 		// SSLType works everywhere — 1.5 merely prints a deprecation notice.
 		// The image ships 1.5.x, but the binary also runs outside it, on
@@ -707,6 +716,13 @@ func wellKnownJunk(folders []string) []string {
 // reads folder attributes and closes. It never selects a mailbox and never
 // fetches a message, and the client does not escape this function.
 func discoverSpecialUse(ctx context.Context, a Account) (special, all []string, err error) {
+	// Resolve the secret before dialing: a pass_cmd that fails has nothing
+	// to say to the server, and the error is clearer without a connection
+	// wrapped around it.
+	pw, err := a.password(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
 	addr := net.JoinHostPort(a.Host, strconv.Itoa(a.Port))
 	// Bounds the connect: without it, an unreachable or silently-dropping
 	// host would hang here with no way to cancel it, since this loop runs at
@@ -735,7 +751,7 @@ func discoverSpecialUse(ctx context.Context, a Account) (special, all []string, 
 	timer := time.AfterFunc(discoveryTimeout, func() { c.Close() })
 	defer timer.Stop()
 
-	if err := c.Login(a.User, a.Password).Wait(); err != nil {
+	if err := c.Login(a.User, pw).Wait(); err != nil {
 		return nil, nil, err
 	}
 	boxes, err := c.List("", "*", &imap.ListOptions{ReturnSpecialUse: true}).Collect()
@@ -762,6 +778,30 @@ func discoverSpecialUse(ctx context.Context, a Account) (special, all []string, 
 	}
 	_ = c.Logout().Wait()
 	return special, all, nil
+}
+
+// password returns the account's secret for the one IMAP conversation this
+// process holds itself, the SPECIAL-USE discovery. With pass_cmd it runs the
+// command the way mbsync does — /bin/sh -c, standard output less one trailing
+// newline — so both consumers see the same value. Stderr is kept apart: a
+// command that prints a warning must not have it glued onto the password. An
+// empty result is an error rather than an empty login attempt.
+func (a Account) password(ctx context.Context) (string, error) {
+	if a.PassCmd == "" {
+		return a.Password, nil
+	}
+	cmd := exec.CommandContext(ctx, "/bin/sh", "-c", a.PassCmd)
+	var stderr strings.Builder
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("account %q: pass_cmd: %w: %s", a.Name, err, strings.TrimSpace(stderr.String()))
+	}
+	pw := strings.TrimSuffix(string(out), "\n")
+	if pw == "" {
+		return "", fmt.Errorf("account %q: pass_cmd printed nothing", a.Name)
+	}
+	return pw, nil
 }
 
 // translateDelim converts an IMAP mailbox name's hierarchy delimiter — the

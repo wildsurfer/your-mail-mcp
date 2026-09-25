@@ -93,7 +93,12 @@ address fails to log in. Every key of the file is in
 [the reference](docs/reference.md#the-accounts-file).
 
 These two files hold your mail passwords. Keep the directory out of version
-control and out of backups that leave the machine.
+control and out of backups that leave the machine. If you would rather they
+did not, give an account `pass_cmd` instead of `password`: a command that
+prints the secret, such as `cat /run/secrets/work_pass` for a Docker secret,
+or `security find-generic-password -s your-mail -a work -w` on a Mac. mbsync
+runs it at connect time and nothing on disk or in the environment holds the
+password. See [the reference](docs/reference.md#the-accounts-file).
 
 ```bash
 docker compose up -d
@@ -377,7 +382,11 @@ story than this does.
 **Passwords are plain text inside the container.** Account passwords come
 from the environment and are written at startup into a generated mbsync
 configuration at file mode `0600`. That file is not encrypted. Anything that
-can read the container's environment, or that file, can read them. Disk
+can read the container's environment, or that file, can read them. An
+account configured with `pass_cmd` instead keeps the secret in whatever the
+command reads — a Docker secret, a keychain — and the environment and the
+generated file hold only the command; the process still receives the
+password in memory for the one IMAP `LIST` it performs itself. Disk
 encryption, who can exec into the container and access to the host are the
 operator's responsibility; the server makes no claim of encrypting
 credentials at rest.

@@ -15,7 +15,9 @@ in the [README](../README.md).
 Mounted read-only at `/config/accounts.json` (see `compose.yaml`). JSON,
 parsed with `encoding/json`, expanded against the process environment before
 parsing so `${VAR}` in any string value is replaced with the environment
-variable of that name. This is how secrets stay out of the file:
+variable of that name. This is how secrets stay out of the file. An account
+can instead name a command with `pass_cmd`; then the secret stays out of the
+environment too:
 
 ```json
 {
@@ -38,7 +40,8 @@ Per-account keys:
 | `host` | — | Required. IMAP server hostname. |
 | `port` | `993` (`imaps`) or `143` (otherwise) | |
 | `user` | — | Required. See [Provider notes](#provider-notes): iCloud wants the short name, not the full email address. |
-| `password` | — | Required. `${VAR}` expands from the environment; a literal password also works but is not recommended. |
+| `password` | — | Required unless `pass_cmd` is set. `${VAR}` expands from the environment; a literal password also works but is not recommended. |
+| `pass_cmd` | — | A command that prints the password, run by mbsync through `/bin/sh -c` on every connection, with one trailing newline stripped. Written to the generated mbsyncrc as `PassCmd`, so neither the environment nor that file holds the secret. Exactly one of `password` and `pass_cmd` must be set. Examples: `cat /run/secrets/work_pass` with a Docker secret, `security find-generic-password -s your-mail -a work -w` on a macOS host. The command runs with the daemon's environment and `PATH`. |
 | `tls` | `imaps` | `imaps`, `starttls`, or `none`. |
 | `patterns` | `["*"]` | mbsync folder patterns — which folders to mirror. |
 | `exclude_folders` | discovered automatically | Folder names to exclude from search by default (see [SPECIAL-USE discovery](#troubleshooting)). Setting this overrides discovery entirely for that account. |
