@@ -147,6 +147,14 @@ func TestLoadConfigRejectsBadInput(t *testing.T) {
 			`{"accounts":[{"name":"a","host":"h","user":"me user","password":"p"}]}`,
 			"user",
 		},
+		"space inside an auth mechanism": {
+			`{"accounts":[{"name":"a","host":"h","user":"u","password":"p","auth_mechs":["PLAIN LOGIN"]}]}`,
+			"auth_mechs",
+		},
+		"quote inside an auth mechanism": {
+			`{"accounts":[{"name":"a","host":"h","user":"u","password":"p","auth_mechs":["PLAIN\""]}]}`,
+			"auth_mechs",
+		},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {

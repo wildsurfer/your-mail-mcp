@@ -40,6 +40,7 @@ Per-account keys:
 | `user` | — | Required. See [Provider notes](#provider-notes): iCloud wants the short name, not the full email address. |
 | `password` | — | Required. `${VAR}` expands from the environment; a literal password also works but is not recommended. |
 | `tls` | `imaps` | `imaps`, `starttls`, or `none`. |
+| `auth_mechs` | negotiated | SASL mechanisms mbsync may offer, as a list of names (`["PLAIN"]`), written as `AuthMechs`. Leave unset unless login fails: on macOS, Gmail and iCloud both need `["PLAIN"]`, see [Provider notes](#provider-notes). An explicit list also replaces the `LOGIN` that `tls: none` would otherwise force. |
 | `patterns` | `["*"]` | mbsync folder patterns — which folders to mirror. |
 | `exclude_folders` | discovered automatically | Folder names to exclude from search by default (see [SPECIAL-USE discovery](#troubleshooting)). Setting this overrides discovery entirely for that account. |
 | `expunge_local` | `false` | Set to `true` to physically remove near-side Maildir copies after a message disappears remotely. This generates `Expunge Near`; the IMAP side remains protected by `Sync Pull`, `Create Near`, and `Remove None`. Whole remote folder deletion is not propagated. With this set the mirror stops being a backup: mail deleted remotely, including by a compromised account being emptied, is removed locally on the next pass. With the default `false`, deleted mail stays on disk and is only hidden from search by the `deleted` tag. |
@@ -99,6 +100,17 @@ through this server yet.
   server keeps retrying on its schedule and mbsync resumes where it
   stopped. Set `SYNC_TIMEOUT` to something like `8h` for the first mirror
   so a long run is not cut off by the default one-hour deadline.
+- **Gmail and iCloud on macOS** (any provider advertising `AUTH=OAUTHBEARER`
+  or `AUTH=XOAUTH2` beside `PLAIN`): the binary run outside the container
+  uses Homebrew's `isync`, which links macOS's system libsasl2, and that
+  library does not negotiate a password login against such a server. iCloud
+  fails with
+  `SASL(-1): generic failure: Unable to find a callback: 18944`, Gmail with
+  `SASL(-7): invalid parameter supplied: Parameter Error in ... passwordserver_saslplugins/plain_clienttoken.c near line 195`.
+  Set `"auth_mechs": ["PLAIN"]` on the account; both then log in. The
+  container image's Cyrus SASL does not show the problem. `openssl s_client
+  -connect host:993` followed by `a CAPABILITY` shows what a server
+  advertises.
 - **Dovecot** servers (many self-hosted and smaller providers) commonly
   prefix folder names with `INBOX.` (e.g. `INBOX.Sent`). If `folders` shows
   folder names you didn't expect, this is usually why.
