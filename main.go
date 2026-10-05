@@ -29,6 +29,7 @@ type Account struct {
 	Port           int      `json:"port"`
 	User           string   `json:"user"`
 	Password       string   `json:"password"`
+	PassCmd        string   `json:"pass_cmd"`
 	TLS            string   `json:"tls"`
 	AuthMechs      []string `json:"auth_mechs"`
 	Patterns       []string `json:"patterns"`
@@ -44,6 +45,19 @@ type Config struct {
 func hasWhitespaceOrControl(s string) bool {
 	for _, r := range s {
 		if unicode.IsSpace(r) || unicode.IsControl(r) {
+			return true
+		}
+	}
+	return false
+}
+
+// hasControl returns true if s contains any control character. A command
+// line needs its spaces, so this is the narrower check pass_cmd gets: a
+// newline in it would end the generated mbsyncrc line early and turn the
+// rest into a directive of its own.
+func hasControl(s string) bool {
+	for _, r := range s {
+		if unicode.IsControl(r) {
 			return true
 		}
 	}
@@ -92,6 +106,7 @@ func loadConfig(path string) (*Config, error) {
 		a.Host = expandBracedEnv(a.Host)
 		a.User = expandBracedEnv(a.User)
 		a.Password = expandBracedEnv(a.Password)
+		a.PassCmd = expandBracedEnv(a.PassCmd)
 		a.TLS = expandBracedEnv(a.TLS)
 		for j, p := range a.Patterns {
 			a.Patterns[j] = expandBracedEnv(p)
@@ -124,8 +139,13 @@ func loadConfig(path string) (*Config, error) {
 		if hasWhitespaceOrControl(a.User) {
 			return nil, fmt.Errorf("account %q: user must not contain whitespace or control characters", a.Name)
 		}
-		if a.Password == "" {
-			return nil, fmt.Errorf("account %q: password is empty; is the referenced environment variable set?", a.Name)
+		switch {
+		case a.Password != "" && a.PassCmd != "":
+			return nil, fmt.Errorf("account %q: password and pass_cmd are both set; use one or the other", a.Name)
+		case a.Password == "" && a.PassCmd == "":
+			return nil, fmt.Errorf("account %q: password is empty and no pass_cmd is set; is the referenced environment variable set?", a.Name)
+		case hasControl(a.PassCmd):
+			return nil, fmt.Errorf("account %q: pass_cmd must not contain control characters", a.Name)
 		}
 		// A mechanism is one SASL token (PLAIN, LOGIN, XOAUTH2 ...) or "*".
 		// The names go on one AuthMechs line separated by spaces, so a
