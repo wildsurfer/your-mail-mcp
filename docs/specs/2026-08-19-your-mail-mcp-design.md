@@ -78,7 +78,8 @@ load:
 ```
 
 Optional per-account keys: `port`, `tls` (`imaps` default, `starttls`, `none`),
-`patterns` (mbsync folder patterns, default `*`), `exclude_folders`.
+`patterns` (mbsync folder patterns, default `*`), `exclude_folders`,
+`auth_mechs`.
 
 Deliberately **not** configurable, with the reasoning recorded so it is not
 reintroduced by habit:
@@ -90,13 +91,13 @@ reintroduced by habit:
 - **`SubFolders` is pinned to `Verbatim`.** It controls the *local* hierarchy
   layout, and mbsync discovers the server's delimiter itself. The setting only
   matters when another mail client reads the same maildir, and nothing does.
-- **`AuthMechs` is left unset**, so mbsync negotiates. The reference implementation
-  pinned `LOGIN` for iCloud without evidence it was required. If a real server
-  fails during testing, it comes back as a per-account key — and they did:
-  Gmail and iCloud both fail on macOS, where mbsync built against the system
-  libsasl2 does not negotiate a password login against a server that also
-  advertises OAUTHBEARER. `auth_mechs` on the account writes the line for
-  that account only; every other account keeps negotiating.
+- **`AuthMechs` is left unset by default**, so mbsync negotiates. The reference
+  implementation pinned `LOGIN` for iCloud without evidence it was required. If
+  a real server fails during testing, it comes back as a per-account key. Two
+  did: Gmail and iCloud both fail on macOS, where mbsync built against the
+  system libsasl2 picks a mechanism that cannot work with a password.
+  `auth_mechs` on the account writes the line for that account only; every
+  other account keeps negotiating.
 
 ## 1. Shape
 

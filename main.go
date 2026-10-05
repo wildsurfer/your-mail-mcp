@@ -22,7 +22,7 @@ import (
 
 // Account is one IMAP account to mirror. Everything except name, host, user
 // and password has a default; see the design spec for why the mbsync knobs
-// that used to live here (pipeline depth, SubFolders, AuthMechs) are pinned.
+// that used to live here (pipeline depth, SubFolders) are pinned.
 type Account struct {
 	Name           string   `json:"name"`
 	Host           string   `json:"host"`
@@ -55,6 +55,10 @@ func hasWhitespaceOrControl(s string) bool {
 // reference (a password of "p$ssw0rd" becomes "p"); braces-only expansion
 // leaves a bare "$" untouched.
 var envRef = regexp.MustCompile(`\$\{(\w+)\}`)
+
+// saslMech matches one auth_mechs entry: a SASL mechanism name (PLAIN,
+// SCRAM-SHA-256, XOAUTH2 ...) or mbsync's "*" wildcard.
+var saslMech = regexp.MustCompile(`^(\*|[A-Za-z0-9_-]+)$`)
 
 func expandBracedEnv(s string) string {
 	return envRef.ReplaceAllStringFunc(s, func(m string) string {
@@ -127,13 +131,12 @@ func loadConfig(path string) (*Config, error) {
 		if a.Password == "" {
 			return nil, fmt.Errorf("account %q: password is empty; is the referenced environment variable set?", a.Name)
 		}
-		// A mechanism is one SASL token (PLAIN, LOGIN, XOAUTH2 ...) or "*".
 		// The names go on one AuthMechs line separated by spaces, so a
-		// space inside one would silently become two mechanisms, and a
-		// quote or backslash would break the generated line.
+		// space inside one would silently become two mechanisms, a quote
+		// would break the line, and mbsync reads a "#" as a comment.
 		for _, m := range a.AuthMechs {
-			if m == "" || hasWhitespaceOrControl(m) || strings.ContainsAny(m, `"\`) {
-				return nil, fmt.Errorf("account %q: auth_mechs entries must be single SASL mechanism names such as PLAIN", a.Name)
+			if !saslMech.MatchString(m) {
+				return nil, fmt.Errorf("account %q: auth_mechs entry %q is not a SASL mechanism name such as PLAIN", a.Name, m)
 			}
 		}
 		switch a.TLS {

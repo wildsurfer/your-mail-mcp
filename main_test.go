@@ -93,6 +93,22 @@ func TestLoadConfigExpandsSpecialCharactersSafely(t *testing.T) {
 	}
 }
 
+// The key has to survive the trip from JSON: unknown fields are not rejected,
+// so a wrong struct tag would drop it silently and the login failure it
+// exists for would come back.
+func TestLoadConfigAcceptsAuthMechs(t *testing.T) {
+	path := writeConfig(t, `{"accounts":[
+		{"name":"work","host":"imap.gmail.com","user":"me@example.com","password":"p","auth_mechs":["PLAIN","SCRAM-SHA-256","*"]}
+	]}`)
+	cfg, err := loadConfig(path)
+	if err != nil {
+		t.Fatalf("loadConfig: %v", err)
+	}
+	if got := strings.Join(cfg.Accounts[0].AuthMechs, " "); got != "PLAIN SCRAM-SHA-256 *" {
+		t.Errorf("auth_mechs = %q, want the three entries as written", got)
+	}
+}
+
 func TestLoadConfigAllowsMissingFileAndNoAccounts(t *testing.T) {
 	cfg, err := loadConfig(filepath.Join(t.TempDir(), "absent.json"))
 	if err != nil || len(cfg.Accounts) != 0 {
@@ -149,6 +165,10 @@ func TestLoadConfigRejectsBadInput(t *testing.T) {
 		},
 		"space inside an auth mechanism": {
 			`{"accounts":[{"name":"a","host":"h","user":"u","password":"p","auth_mechs":["PLAIN LOGIN"]}]}`,
+			"auth_mechs",
+		},
+		"comment character in an auth mechanism": {
+			`{"accounts":[{"name":"a","host":"h","user":"u","password":"p","auth_mechs":["#PLAIN"]}]}`,
 			"auth_mechs",
 		},
 		"quote inside an auth mechanism": {

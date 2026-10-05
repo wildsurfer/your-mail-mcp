@@ -984,9 +984,9 @@ func TestGenMbsyncrcForcesLoginOnlyWhenUnencrypted(t *testing.T) {
 }
 
 // auth_mechs is the per-account key the spec reserved for a real server that
-// fails negotiation: one advertising OAUTHBEARER and XOAUTH2 beside PLAIN,
-// where macOS's system libsasl2 picks OAUTHBEARER and fails for want of a
-// token callback; pinning PLAIN logs in.
+// fails negotiation: Gmail and iCloud, where mbsync linked against macOS's
+// system libsasl2 picks a mechanism that cannot work with a password;
+// pinning PLAIN logs in.
 func TestGenMbsyncrcWritesConfiguredAuthMechs(t *testing.T) {
 	out := genMbsyncrc(&Config{Accounts: []Account{
 		{Name: "a", Host: "h", Port: 993, User: "u", Password: "p", TLS: "imaps", Patterns: []string{"*"}, AuthMechs: []string{"PLAIN", "LOGIN"}},

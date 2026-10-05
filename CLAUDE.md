@@ -107,8 +107,9 @@ without changing the spec first.
   of defect it catches (container toolchain skew, the real IMAP conversation)
   is invisible to the rest of the suite.
 - `INBOX` is the only folder name that may be hardcoded; RFC 3501 requires it.
-- Pipeline depth is pinned to 1 and `SubFolders` to `Verbatim`, and `AuthMechs` is
-  left unset. Those are settled; see the spec for why.
+- Pipeline depth is pinned to 1 and `SubFolders` to `Verbatim`. `AuthMechs` is
+  left unset unless an account sets `auth_mechs`. Those are settled; see the
+  spec for why.
 - Dependencies stay on the latest stable release everywhere: the Go toolchain,
   the two modules, and the image's base and packages. When no stable release
   exists, the newest available is used and named as the exception — today that
