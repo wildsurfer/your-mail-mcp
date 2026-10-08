@@ -591,7 +591,9 @@ func newHTTPHandler(o *oauthServer, m *mcp.Server, srv *Server) http.Handler {
 	mux.HandleFunc("/authorize", o.handleAuthorize)
 	mux.HandleFunc("/token", o.handleToken)
 
-	streamable := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return m }, nil)
+	// The SDK requires stateless HTTP for protocol 2026-07-28. The default
+	// advertises only older versions, which ChatGPT rejects during discovery.
+	streamable := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return m }, &mcp.StreamableHTTPOptions{Stateless: true})
 	mux.Handle("/mcp", requireBearer(o, streamable))
 	// Raw attachment bytes for anything too big for a tool response. A
 	// bearer token works for scripted callers; a signed link works in a
