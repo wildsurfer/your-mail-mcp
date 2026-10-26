@@ -133,11 +133,18 @@ on exit, rather than mounted from the host. That directory is ordinary
 container filesystem, not a tmpfs: the compose file mounts none, so the file's
 protection is its 0600 mode and the container boundary, nothing more. One mbsync channel
 per account. The directives that constitute the read-only guarantee —
-`Sync Pull`, `Create Near`, `Remove None`, and an `Expunge` that may only be
+`Sync Pull`, `Create Near`, `Remove Near`, and an `Expunge` that may only be
 `None` (the default) or `Near` (an account with `expunge_local` set; it
 deletes only the local copy of mail already deleted on the server) — are
 therefore written by the program, per channel, and cannot be edited into
 something that pushes.
+
+`Remove Near` replaced `Remove None` after a folder deleted on the server
+failed every later pass of its account: mbsync keeps sync state for every
+folder it has seen, and with `None` it reports a vanished one as an error on
+each run. `Near` acts on the local side only, and mbsync never removes a
+non-empty mailbox, so the local copy of a deleted or renamed folder stays in
+the mirror with its mail. Only an empty local folder is removed.
 
 This also removes a documented failure mode: a blank line inside a Channel block
 silently turns those four directives into inert global options, and nothing
