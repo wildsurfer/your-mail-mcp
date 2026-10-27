@@ -12,6 +12,7 @@ services:
         -Dgreenmail.users=tester:secret
     ports:
       - "127.0.0.1:13025:3025"   # SMTP, for seeding from the test
+      - "127.0.0.1:13143:3143"   # IMAP, for staging folder changes from the test
   your-mail-mcp:
     build: ../..
     # The image's default command is stdio; the live stack needs the daemon.

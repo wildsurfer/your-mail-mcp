@@ -23,7 +23,7 @@ func TestGenMbsyncrcIsPullOnlyForEveryAccount(t *testing.T) {
 	out := genMbsyncrc(cfg, "/mail")
 
 	// Once per channel, two channels per account.
-	for _, directive := range []string{"Sync Pull", "Create Near", "Remove None", "Expunge None"} {
+	for _, directive := range []string{"Sync Pull", "Create Near", "Remove Near", "Expunge None"} {
 		if got := strings.Count(out, directive); got != 2*len(cfg.Accounts) {
 			t.Errorf("%q appears %d times, want once per channel, two channels per account (%d)", directive, got, 2*len(cfg.Accounts))
 		}
@@ -59,12 +59,12 @@ func TestGenMbsyncrcExpungeLocal(t *testing.T) {
 		TLS: "imaps", Patterns: []string{"*"}, ExpungeLocal: true,
 	}}}
 	out := genMbsyncrc(cfg, "/mail")
-	for _, directive := range []string{"Sync Pull", "Create Near", "Remove None", "Expunge Near"} {
+	for _, directive := range []string{"Sync Pull", "Create Near", "Remove Near", "Expunge Near"} {
 		if got := strings.Count(out, directive); got != 2 {
 			t.Errorf("%q appears %d times, want once per channel", directive, got)
 		}
 	}
-	for _, forbidden := range []string{"Push", "Create Far", "Create Both", "Remove Near", "Remove Far", "Remove Both", "Expunge Far", "Expunge Both", "Expunge None"} {
+	for _, forbidden := range []string{"Push", "Create Far", "Create Both", "Remove None", "Remove Far", "Remove Both", "Expunge Far", "Expunge Both", "Expunge None"} {
 		if strings.Contains(out, forbidden) {
 			t.Errorf("generated configuration contains %q", forbidden)
 		}
@@ -207,7 +207,7 @@ func TestGenMbsyncrcAddsRecentChannelPerAccount(t *testing.T) {
 	}
 	// The read-only guarantee applies to the recent channel too.
 	recent := got[strings.Index(got, "Channel work-recent"):]
-	for _, d := range []string{"Sync Pull\n", "Create Near\n", "Remove None\n", "Expunge None\n"} {
+	for _, d := range []string{"Sync Pull\n", "Create Near\n", "Remove Near\n", "Expunge None\n"} {
 		if !strings.Contains(recent, d) {
 			t.Fatalf("recent channel lacks %q", d)
 		}

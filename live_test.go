@@ -29,12 +29,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/emersion/go-imap/v2/imapclient"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 const (
 	liveBase = "http://127.0.0.1:18080"
 	liveSMTP = "127.0.0.1:13025"
+	liveIMAP = "127.0.0.1:13143"
 	livePass = "live-test-passphrase"
 )
 
@@ -76,6 +78,24 @@ func seedRaw(t *testing.T, from, msg string) {
 	if err := smtp.SendMail(liveSMTP, nil, from, []string{"tester"}, []byte(msg)); err != nil {
 		t.Fatalf("seeding from %s: %v", from, err)
 	}
+}
+
+// onGreenMail runs fn in a logged-in IMAP session on the test server. The
+// server itself only ever issues LIST; the test needs the rest of IMAP to
+// stage what a user does in webmail, such as creating or deleting a folder.
+func onGreenMail(fn func(c *imapclient.Client) error) error {
+	c, err := imapclient.DialInsecure(liveIMAP, nil)
+	if err != nil {
+		return fmt.Errorf("imap dial: %w", err)
+	}
+	defer c.Close()
+	if err := c.Login("tester", "secret").Wait(); err != nil {
+		return fmt.Errorf("imap login: %w", err)
+	}
+	if err := fn(c); err != nil {
+		return err
+	}
+	return c.Logout().Wait()
 }
 
 // mcpOverStdin starts cmd, sends the MCP handshake and a tools/list on its
@@ -295,6 +315,65 @@ func TestLive(t *testing.T) {
 			t.Fatal("the refreshed message never appeared")
 		}
 		time.Sleep(2 * time.Second)
+	}
+
+	// A folder that vanishes from the server must not fail every later pass
+	// of its account, and its local copy must stay searchable (#18).
+	gone := "From: frank@example.com\r\nTo: tester\r\nSubject: filed away\r\nMessage-ID: <gone1@example.com>\r\n" +
+		"Date: " + time.Now().UTC().Format(time.RFC1123Z) + "\r\n\r\nThis folder is about to go.\r\n"
+	err = onGreenMail(func(c *imapclient.Client) error {
+		if err := c.Create("Gone", nil).Wait(); err != nil {
+			return err
+		}
+		cmd := c.Append("Gone", int64(len(gone)), nil)
+		if _, err := cmd.Write([]byte(gone)); err != nil {
+			return err
+		}
+		if err := cmd.Close(); err != nil {
+			return err
+		}
+		_, err := cmd.Wait()
+		return err
+	})
+	if err != nil {
+		t.Fatalf("staging a folder on the test server: %v", err)
+	}
+	folderDeadline := time.Now().Add(time.Minute)
+	for !strings.Contains(call("count", map[string]any{"query": "id:gone1@example.com"}), "1") {
+		if time.Now().After(folderDeadline) {
+			t.Fatal("the message in the new folder never arrived")
+		}
+		time.Sleep(2 * time.Second)
+	}
+	// Renamed rather than deleted: to mbsync both make the old folder vanish
+	// from the server, and GreenMail 2.1 drops the connection that deletes a
+	// folder mbsync has selected before (a NullPointerException in its
+	// session cleanup).
+	if err := onGreenMail(func(c *imapclient.Client) error { return c.Rename("Gone", "Renamed", nil).Wait() }); err != nil {
+		t.Fatalf("renaming the folder on the test server: %v", err)
+	}
+	deleted := time.Now()
+	folderDeadline = deleted.Add(time.Minute)
+	lastSync := regexp.MustCompile(`last successful sync: (\S+)`)
+	for {
+		out := call("status", nil)
+		if strings.Contains(out, "cannot be opened anymore") {
+			t.Fatalf("the deleted folder fails the account's sync:\n%s", out)
+		}
+		// A full ticker interval after the deletion, so the pass that
+		// set it started after the folder was gone.
+		if m := lastSync.FindStringSubmatch(out); m != nil && !strings.Contains(out, "last error") {
+			if at, err := time.Parse(time.RFC3339, m[1]); err == nil && at.After(deleted.Add(5*time.Second)) {
+				break
+			}
+		}
+		if time.Now().After(folderDeadline) {
+			t.Fatalf("no clean pass after the folder was deleted:\n%s", out)
+		}
+		time.Sleep(2 * time.Second)
+	}
+	if out := call("files", map[string]any{"query": "id:gone1@example.com"}); !strings.Contains(out, "testbox/Gone/") {
+		t.Errorf("the vanished folder's local copy is gone: %s", out)
 	}
 
 	// The recent channel is its own mbsync invocation into its own store, and

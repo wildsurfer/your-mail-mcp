@@ -66,7 +66,14 @@ synchronize_flags=true
 // channelTail closes every generated channel. The first four lines are the
 // read-only guarantee; they must appear once per channel, and the directive
 // test counts them.
-const channelTail = "Sync Pull\nCreate Near\nRemove None\nExpunge %s\nSyncState *\nCopyArrivalDate yes\n"
+//
+// Remove Near, not None: with None, a folder deleted or renamed on the server
+// fails every later pass of its account, because mbsync still holds sync
+// state for it. Near acts on the local side only, and mbsync never removes a
+// mailbox that is not empty ("for safety, non-empty mailboxes are never
+// deleted", mbsync(1)), so the local copy and its mail stay. What it can
+// remove is an empty local folder whose server folder is gone.
+const channelTail = "Sync Pull\nCreate Near\nRemove Near\nExpunge %s\nSyncState *\nCopyArrivalDate yes\n"
 
 // genMbsyncrc writes two channels per account. The file is generated rather
 // than mounted for two reasons: the four read-only directives cannot be edited
