@@ -4,7 +4,7 @@ go 1.27.0
 
 require (
 	github.com/emersion/go-imap/v2 v2.0.0-beta.8
-	github.com/modelcontextprotocol/go-sdk v1.7.0
+	github.com/modelcontextprotocol/go-sdk v1.8.0
 )
 
 require (
