@@ -7,7 +7,7 @@
       "name": "your-mail",
       "source": "./",
       "description": "Read-only access to your IMAP mail, plus an email skill.",
-      "version": "0.3.0",
+      "version": "0.5.0",
       "homepage": "https://github.com/wildsurfer/your-mail-mcp",
       "license": "MIT",
       "keywords": ["email", "imap", "gmail", "icloud", "notmuch", "read-only"]
