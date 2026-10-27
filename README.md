@@ -431,6 +431,6 @@ order of how much each buys you.
   what they shell out to.
 - [Running it on a server](docs/server.md): install script, hardening, your
   own domain with Caddy.
-- [Upgrading from 0.3.x](docs/upgrading.md).
+- [Upgrading from 0.4.x](docs/upgrading.md).
 - [Design spec](docs/specs/2026-08-19-your-mail-mcp-design.md) and
   [the survey of email MCP servers](docs/research/email-mcp-landscape.md).
