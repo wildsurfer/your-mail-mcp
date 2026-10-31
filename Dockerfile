@@ -8,8 +8,12 @@ RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/your-mail-mcp .
 
 FROM debian:trixie-slim
 LABEL io.modelcontextprotocol.server.name="io.github.wildsurfer/your-mail-mcp"
+# libsasl2-modules-kdexoauth2 gives Cyrus SASL the XOAUTH2 mechanism for
+# OAuth2-only accounts. The token helper such an account's pass_cmd runs is
+# not in this image; examples/oauth2/ derives one that carries it.
 RUN apt-get update \
- && apt-get install -y --no-install-recommends isync notmuch w3m ca-certificates \
+ && apt-get install -y --no-install-recommends \
+    isync notmuch w3m ca-certificates libsasl2-modules-kdexoauth2 \
  && rm -rf /var/lib/apt/lists/*
 COPY --from=build /out/your-mail-mcp /usr/local/bin/your-mail-mcp
 ENV MAILDIR=/mail INDEX=/index CONFIG=/config/accounts.json LISTEN_ADDR=:8080

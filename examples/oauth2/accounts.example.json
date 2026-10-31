@@ -1,0 +1,13 @@
+{
+  "accounts": [
+    {
+      "name": "work",
+      "host": "outlook.office365.com",
+      "user": "you@example.com",
+      "pass_cmd": "python3 /oauth/mutt_oauth2.py /oauth/token.txt",
+      "auth_mechs": ["XOAUTH2"],
+      "patterns": ["*"],
+      "exclude_folders": ["Junk Email", "Deleted Items"]
+    }
+  ]
+}
