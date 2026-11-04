@@ -1123,3 +1123,25 @@ func TestSyncBacksOffAfterConsecutiveFailures(t *testing.T) {
 		t.Error("the healthy account has a backoff")
 	}
 }
+
+// mbsync hides the auth data of AUTHENTICATE PLAIN when the server rejects it,
+// but prints any other mechanism's whole command. With XOAUTH2 that is the
+// base64 of the access token, and execCommand's output reaches the container
+// logs and the status and refresh tools. The line is what mbsync 1.5.1 printed
+// against a real server.
+func TestExecCommandRedactsAuthData(t *testing.T) {
+	const authData = "dXNlcj10ZXN0ZXIBYXV0aD1CZWFyZXIgd3JvbmcBAQ=="
+	line := "IMAP command 'AUTHENTICATE XOAUTH2 " + authData + "' returned an error: AUTHENTICATE failed. Invalid login"
+	out, err := execCommand(context.Background(), "sh", "-c", `printf '%s\n' "$0"; exit 1`, line)
+	if err == nil {
+		t.Fatal("want the process's failure to stay an error")
+	}
+	for name, got := range map[string]string{"output": out, "error": err.Error()} {
+		if strings.Contains(got, authData) {
+			t.Errorf("%s carries the auth data: %s", name, got)
+		}
+		if !strings.Contains(got, "AUTHENTICATE XOAUTH2 <authdata>' returned an error: AUTHENTICATE failed. Invalid login") {
+			t.Errorf("%s lost what the operator needs to see: %s", name, got)
+		}
+	}
+}

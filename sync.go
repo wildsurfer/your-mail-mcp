@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -276,16 +277,25 @@ type Syncer struct {
 	kick chan struct{}
 }
 
+// authData matches the secret in a rejected AUTHENTICATE command. mbsync hides
+// it for PLAIN only and prints it for every other mechanism, and for XOAUTH2 it
+// is the base64 of a token that may still be valid. This output reaches the
+// logs and the tools, so nothing past execCommand may see the secret. The
+// mechanism is uppercase, which keeps the server's own "AUTHENTICATE failed."
+// text out of the match.
+var authData = regexp.MustCompile(`(AUTHENTICATE [A-Z0-9_-]+) [^\s']+`)
+
 // execCommand is the real runCmd: one process, its combined output, and an
 // error that carries that output. Kept as a named function so a test can
 // run it against a real process and check what a killed one looks like.
 func execCommand(ctx context.Context, name string, args ...string) (string, error) {
 	cmd := exec.CommandContext(ctx, name, args...)
-	out, err := cmd.CombinedOutput()
+	raw, err := cmd.CombinedOutput()
+	out := authData.ReplaceAllString(string(raw), "$1 <authdata>")
 	if err != nil {
-		return string(out), fmt.Errorf("%s: %w: %s", name, err, strings.TrimSpace(string(out)))
+		return out, fmt.Errorf("%s: %w: %s", name, err, strings.TrimSpace(out))
 	}
-	return string(out), nil
+	return out, nil
 }
 
 func newSyncer(cfg *Config, maildir, index, mbsyncConfig string, nm *Notmuch) *Syncer {
