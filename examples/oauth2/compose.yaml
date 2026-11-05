@@ -1,0 +1,22 @@
+# One your-mail-mcp instance for an account that only accepts XOAUTH2, built
+# from the Dockerfile here: the published image plus python3 for the token
+# helper. See README.md here.
+services:
+  your-mail-mcp:
+    build: .
+    image: your-mail-mcp-oauth2
+    container_name: your-mail-mcp-oauth2
+    command: serve
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8080:8080"
+    env_file: .env
+    volumes:
+      - ./accounts.json:/config/accounts.json:ro
+      - mail:/mail
+      - index:/index
+      # Writable: the token helper rewrites token.txt on every refresh.
+      - ./oauth:/oauth
+volumes:
+  mail:
+  index:

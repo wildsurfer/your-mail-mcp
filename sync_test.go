@@ -1061,6 +1061,33 @@ func TestGenMbsyncrcWritesConfiguredAuthMechs(t *testing.T) {
 	}
 }
 
+// The OAuth2 example is the shape an XOAUTH2-only account takes: a pass_cmd
+// that prints a fresh token and XOAUTH2 as the only mechanism. Loading the
+// shipped file keeps the example from drifting away from what the server
+// accepts, and every channel it generates must still only pull.
+func TestOAuth2ExampleGeneratesXOAUTH2WithPassCmd(t *testing.T) {
+	cfg, err := loadConfig(filepath.Join("examples", "oauth2", "accounts.example.json"))
+	if err != nil {
+		t.Fatalf("loadConfig: %v", err)
+	}
+	out := genMbsyncrc(cfg, "/mail")
+	for _, want := range []string{
+		"\nPassCmd \"python3 /oauth/mutt_oauth2.py /oauth/token.txt\"\n",
+		"\nAuthMechs XOAUTH2\n",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q in:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "\nPass ") {
+		t.Error("a pass_cmd account must not also get a Pass line")
+	}
+	channels := strings.Count(out, "\nChannel ")
+	if channels == 0 || strings.Count(out, "\nSync Pull\n") != channels || strings.Count(out, "\nCreate Near\n") != channels {
+		t.Errorf("every channel must pull only, got:\n%s", out)
+	}
+}
+
 func TestExcludedFoldersUnionsSpecialUseWithKnownNames(t *testing.T) {
 	// iCloud in the field: LIST marks only \Trash ("Deleted Messages"), while
 	// the junk folder is present by name alone. Both must be excluded.

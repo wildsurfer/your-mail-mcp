@@ -93,6 +93,7 @@ without changing the spec first.
 | `oauth.go` | authorization-server endpoints and the client/token store |
 | `bridge.go` | `stdio` bridge to the daemon socket |
 | `.github/workflows/ci.yaml` | vet, unit and live tests on every PR; multi-arch image to GHCR on main and tags; release binaries on tags |
+| `examples/oauth2/` | derived image and compose project for an XOAUTH2-only account (token helper via `pass_cmd`) |
 | `docs/specs/` | the design spec, which is the binding authority |
 | `docs/reviews/` | what was verified against the real toolchain, and what was not |
 | `docs/research/` | the survey and provider research the design rests on |

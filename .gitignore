@@ -13,6 +13,12 @@ CLAUDE.local.md
 # Machine-specific deployment config. Never commit.
 /compose.override.yaml
 
+# The OAuth2 example's secrets and token helper. The templates stay tracked.
+/examples/oauth2/.env
+/examples/oauth2/renew.env
+/examples/oauth2/accounts.json
+/examples/oauth2/oauth/
+
 # Playwright MCP session dumps.
 /.playwright-mcp/
 

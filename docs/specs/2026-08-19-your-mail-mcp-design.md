@@ -25,7 +25,9 @@ Out of scope for v1, listed so it does not creep in:
 
 - Sending mail. Composing drafts. Any write to any account.
 - Attachment export.
-- XOAUTH2 against Gmail or Microsoft as mail providers.
+- Obtaining OAuth2 tokens from a mail provider in this process. Since
+  `pass_cmd`, an external helper may supply an XOAUTH2 token to mbsync; the
+  server itself never speaks the provider's OAuth2.
 
 ## Host and provider agnosticism
 
