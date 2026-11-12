@@ -621,7 +621,15 @@ func newHTTPHandler(o *oauthServer, m *mcp.Server, srv *Server) http.Handler {
 
 	// The SDK requires stateless HTTP for protocol 2026-07-28. The default
 	// advertises only older versions, which ChatGPT rejects during discovery.
-	streamable := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return m }, &mcp.StreamableHTTPOptions{Stateless: true})
+	//
+	// The SDK's DNS-rebinding guard answers 403 to any request that arrives
+	// on a loopback address with a non-loopback Host, which is every request
+	// from a tunnel or reverse proxy on the same host that keeps the public
+	// Host (Tailscale Funnel does). The guard protects a local server that
+	// has no credentials; this handler only runs behind requireBearer, so a
+	// rebinding page without a token gets 401 before it gets here.
+	streamable := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return m },
+		&mcp.StreamableHTTPOptions{Stateless: true, DisableLocalhostProtection: true})
 	mux.Handle("/mcp", requireBearer(o, streamable))
 	// Raw attachment bytes for anything too big for a tool response. A
 	// bearer token works for scripted callers; a signed link works in a
