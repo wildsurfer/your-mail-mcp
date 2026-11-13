@@ -823,6 +823,9 @@ func TestAuthorizeSerializesFailedPassphraseAttempts(t *testing.T) {
 // must fail closed together, or a crash between the two leaves a
 // rotated-away token alive again after a restart.
 func TestTokenRefreshFailsClosedWhenPersistFails(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root can write to a read-only directory, so the save cannot be made to fail")
+	}
 	dir := t.TempDir()
 	o, err := newOAuth(filepath.Join(dir, "oauth.json"), "https://mail.example.com", "hunter2")
 	if err != nil {
