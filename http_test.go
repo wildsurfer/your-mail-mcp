@@ -45,6 +45,9 @@ func TestHTTPModernDiscoveryAndCalls(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		// A tunnel on the same host connects over loopback but keeps the
+		// public Host. The listener here is loopback too, so this is that path.
+		req.Host = strings.TrimPrefix(o.publicURL, "https://")
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("Accept", "application/json, text/event-stream")
 		req.Header.Set("Mcp-Protocol-Version", version)
